@@ -77,7 +77,8 @@ dist
 
 # Gatsby files
 .cache/
-public
+# public (commented out - essential for Electron app)
+# public
 
 # Storybook build outputs
 .out
