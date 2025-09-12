@@ -4,6 +4,7 @@ import VideoInfo from './VideoInfo';
 import FormatSelector from './FormatSelector';
 import DownloadProgress from './DownloadProgress';
 import DynamicParameterControls from './DynamicParameterControls';
+import DownloadSettings from './DownloadSettings';
 import MiniConsole from './MiniConsole';
 
 const VideoDownloader = () => {
