@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 
-const VideoInfo = ({ videoInfo }) => {
+const VideoInfo = ({ videoInfo, downloadParameters }) => {
   const formatDuration = (seconds) => {
     if (!seconds) return 'Unknown';
     const hours = Math.floor(seconds / 3600);
@@ -161,6 +161,48 @@ const VideoInfo = ({ videoInfo }) => {
                 </span>
               )}
             </div>
+            
+            {/* Selected Download Options */}
+            {downloadParameters && (
+              <div className="mt-4 p-4 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-900/20 dark:to-blue-900/20 rounded-lg border border-indigo-200 dark:border-indigo-800">
+                <h4 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200 mb-2 flex items-center">
+                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Selected Download Options
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Quality:</span>
+                    <span className="ml-1 font-medium text-gray-900 dark:text-white">
+                      {downloadParameters.quality === 'best' ? '🏆 Best' : 
+                       downloadParameters.quality === 'worst' ? '⚡ Fastest' : 
+                       `📺 ${downloadParameters.quality}`}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Format:</span>
+                    <span className="ml-1 font-medium text-gray-900 dark:text-white">
+                      {downloadParameters.format?.toUpperCase()}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Audio:</span>
+                    <span className="ml-1 font-medium text-gray-900 dark:text-white">
+                      {downloadParameters.extractAudio ? '🎵 Only' : 
+                       downloadParameters.integratedAudio ? '🔊 Integrated' : '❌ None'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Extras:</span>
+                    <span className="ml-1 font-medium text-gray-900 dark:text-white">
+                      {[downloadParameters.downloadSubtitles && '📝', 
+                        downloadParameters.embedThumbnail && '🖼️'].filter(Boolean).join(' ') || '➖'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

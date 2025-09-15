@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
-  const [selectedTab, setSelectedTab] = useState('video');
+const FormatSelector = ({ formats, selectedFormat, onFormatChange, downloadParameters }) => {
+  const [selectedTab, setSelectedTab] = useState('combined');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const formatCategories = useMemo(() => {
@@ -49,7 +49,27 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
 
   const getQualityLabel = (format) => {
     if (format.height) {
-      return `${format.height}p`;
+      const height = format.height;
+      let label = `${height}p`;
+      
+      // Add quality descriptors for better UX
+      if (height >= 8320) {
+        label += ' (8K+ Ultra HD)';
+      } else if (height >= 4320) {
+        label += ' (8K Ultra HD)';
+      } else if (height >= 2880) {
+        label += ' (5K Ultra HD)';
+      } else if (height >= 2160) {
+        label += ' (4K Ultra HD)';
+      } else if (height >= 1440) {
+        label += ' (2K QHD)';
+      } else if (height >= 1080) {
+        label += ' (Full HD)';
+      } else if (height >= 720) {
+        label += ' (HD)';
+      }
+      
+      return label;
     }
     if (format.abr) {
       return `${format.abr}kbps`;
@@ -60,14 +80,73 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
   const getFormatIcon = (format) => {
     const hasVideo = format.vcodec && format.vcodec !== 'none';
     const hasAudio = format.acodec && format.acodec !== 'none';
+    const height = format.height || 0;
 
     if (hasVideo && hasAudio) {
+      // Enhanced icons based on quality level
+      if (height >= 4320) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">💎</span>
+          </div>
+        );
+      } else if (height >= 2160) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">🔥</span>
+          </div>
+        );
+      } else if (height >= 1080) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">⭐</span>
+          </div>
+        );
+      }
       return (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
         </svg>
       );
     } else if (hasVideo) {
+      // Enhanced video-only icons
+      if (height >= 4320) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H4a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0V4a1 1 0 011-1h6a1 1 0 011 1v0" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">💎</span>
+          </div>
+        );
+      } else if (height >= 2160) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H4a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0V4a1 1 0 011-1h6a1 1 0 011 1v0" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">🔥</span>
+          </div>
+        );
+      } else if (height >= 1080) {
+        return (
+          <div className="relative">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H4a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0V4a1 1 0 011-1h6a1 1 0 011 1v0" />
+            </svg>
+            <span className="absolute -top-1 -right-1 text-xs">⭐</span>
+          </div>
+        );
+      }
       return (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H4a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0V4a1 1 0 011-1h6a1 1 0 011 1v0" />
@@ -82,26 +161,53 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
     }
   };
 
-  const FormatCard = ({ format, isSelected, onClick }) => (
-    <motion.div
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
-        isSelected
-          ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20 shadow-md'
-          : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-gray-800'
-      }`}
-      onClick={onClick}
-    >
-      {isSelected && (
-        <div className="absolute top-2 right-2">
-          <div className="w-5 h-5 bg-brand-500 rounded-full flex items-center justify-center">
-            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
+  const getRecommendedBadge = (format) => {
+    const hasVideo = format.vcodec && format.vcodec !== 'none';
+    const hasAudio = format.acodec && format.acodec !== 'none';
+    
+    if (downloadParameters?.extractAudio && !hasVideo && hasAudio) {
+      return { text: 'Best for Audio', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' };
+    }
+    
+    if (!downloadParameters?.extractAudio && hasVideo && hasAudio) {
+      if (format.height >= 1080) {
+        return { text: 'High Quality', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' };
+      } else if (format.height >= 720) {
+        return { text: 'Good Quality', color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300' };
+      }
+    }
+    
+    return null;
+  };
+
+  const FormatCard = ({ format, isSelected, onClick }) => {
+    const recommendedBadge = getRecommendedBadge(format);
+    
+    return (
+      <motion.div
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+          isSelected
+            ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20 shadow-md'
+            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-gray-800'
+        }`}
+        onClick={onClick}
+      >
+        <div className="absolute top-2 right-2 flex items-center space-x-1">
+          {recommendedBadge && (
+            <span className={`text-xs px-2 py-1 rounded-full font-medium ${recommendedBadge.color}`}>
+              {recommendedBadge.text}
+            </span>
+          )}
+          {isSelected && (
+            <div className="w-5 h-5 bg-brand-500 rounded-full flex items-center justify-center">
+              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          )}
         </div>
-      )}
       
       <div className="flex items-start space-x-3">
         <div className={`p-2 rounded-lg ${
@@ -153,13 +259,41 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
           </div>
         </div>
       </div>
-    </motion.div>
-  );
+      </motion.div>
+    );
+  };
 
   const tabs = [
-    { id: 'combined', label: 'Video + Audio', count: formatCategories.combined.length },
-    { id: 'video', label: 'Video Only', count: formatCategories.video.length },
-    { id: 'audio', label: 'Audio Only', count: formatCategories.audio.length }
+    { 
+      id: 'combined', 
+      label: 'Video + Audio', 
+      count: formatCategories.combined.length,
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      )
+    },
+    { 
+      id: 'video', 
+      label: 'Video Only', 
+      count: formatCategories.video.length,
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H4a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0V4a1 1 0 011-1h6a1 1 0 011 1v0" />
+        </svg>
+      )
+    },
+    { 
+      id: 'audio', 
+      label: 'Audio Only', 
+      count: formatCategories.audio.length,
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+        </svg>
+      )
+    }
   ];
 
   const currentFormats = formatCategories[selectedTab] || [];
@@ -199,15 +333,16 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
             <button
               key={tab.id}
               onClick={() => setSelectedTab(tab.id)}
-              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
+              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md transition-all duration-200 flex items-center justify-center space-x-2 ${
                 selectedTab === tab.id
                   ? 'bg-white dark:bg-gray-700 text-brand-600 dark:text-brand-400 shadow-sm'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
             >
-              {tab.label}
+              {tab.icon}
+              <span>{tab.label}</span>
               {tab.count > 0 && (
-                <span className={`ml-2 px-2 py-0.5 text-xs rounded-full ${
+                <span className={`px-2 py-0.5 text-xs rounded-full ${
                   selectedTab === tab.id
                     ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30 dark:text-brand-400'
                     : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
@@ -264,30 +399,30 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
             animate={{ opacity: 1, y: 0 }}
             className="mt-6 p-4 bg-brand-50 dark:bg-brand-900/20 rounded-lg border border-brand-200 dark:border-brand-800"
           >
-            <h4 className="font-medium text-brand-900 dark:text-brand-100 mb-2 flex items-center">
+            <h4 className="font-medium text-brand-900 dark:text-brand-100 mb-3 flex items-center">
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              Selected Format
+              Selected Format Details
             </h4>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <span className="text-brand-600 dark:text-brand-400 font-medium">Quality:</span>
-                <p className="text-brand-800 dark:text-brand-200">{getQualityLabel(selectedFormat)}</p>
+                <p className="text-brand-800 dark:text-brand-200 font-semibold">{getQualityLabel(selectedFormat)}</p>
               </div>
               <div>
                 <span className="text-brand-600 dark:text-brand-400 font-medium">Format:</span>
-                <p className="text-brand-800 dark:text-brand-200">{selectedFormat.ext?.toUpperCase() || 'Unknown'}</p>
+                <p className="text-brand-800 dark:text-brand-200 font-semibold">{selectedFormat.ext?.toUpperCase() || 'Unknown'}</p>
               </div>
               {selectedFormat.filesize && (
                 <div>
                   <span className="text-brand-600 dark:text-brand-400 font-medium">Size:</span>
-                  <p className="text-brand-800 dark:text-brand-200">{formatFileSize(selectedFormat.filesize)}</p>
+                  <p className="text-brand-800 dark:text-brand-200 font-semibold">{formatFileSize(selectedFormat.filesize)}</p>
                 </div>
               )}
               <div>
                 <span className="text-brand-600 dark:text-brand-400 font-medium">Type:</span>
-                <p className="text-brand-800 dark:text-brand-200">
+                <p className="text-brand-800 dark:text-brand-200 font-semibold">
                   {selectedFormat.vcodec && selectedFormat.vcodec !== 'none' && selectedFormat.acodec && selectedFormat.acodec !== 'none'
                     ? 'Video + Audio'
                     : selectedFormat.vcodec && selectedFormat.vcodec !== 'none'
@@ -295,6 +430,28 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange }) => {
                     : 'Audio Only'
                   }
                 </p>
+              </div>
+            </div>
+            
+            {/* Download compatibility info */}
+            <div className="mt-3 p-3 bg-white dark:bg-gray-800 rounded-lg">
+              <div className="flex items-start space-x-2">
+                <svg className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="text-xs text-gray-600 dark:text-gray-400">
+                  <p className="font-medium text-gray-900 dark:text-white mb-1">Download Info:</p>
+                  <p>
+                    {downloadParameters?.extractAudio 
+                      ? 'This format will be used for audio extraction'
+                      : selectedFormat.vcodec && selectedFormat.vcodec !== 'none' && selectedFormat.acodec && selectedFormat.acodec !== 'none'
+                      ? 'Complete video with integrated audio - ready to play'
+                      : selectedFormat.vcodec && selectedFormat.vcodec !== 'none'
+                      ? 'Video only - audio will be downloaded separately and merged'
+                      : 'Audio only format'
+                    }
+                  </p>
+                </div>
               </div>
             </div>
           </motion.div>

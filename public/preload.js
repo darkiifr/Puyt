@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   selectDownloadPath: () => ipcRenderer.invoke('select-download-path'),
+  validatePath: (path) => ipcRenderer.invoke('validate-path', path),
+  getHomeDirectory: () => ipcRenderer.invoke('get-home-directory'),
   
   // Event listeners
   onDownloadProgress: (callback) => {
@@ -27,6 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onYtDlpInstallProgress: (callback) => {
     ipcRenderer.on('ytdlp-install-progress', (event, data) => callback(data));
+  },
+  onDownloadComplete: (callback) => {
+    ipcRenderer.on('download-complete', (event, data) => callback(data));
   },
   
   // Remove listeners

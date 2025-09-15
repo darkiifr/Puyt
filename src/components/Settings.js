@@ -121,6 +121,26 @@ const Settings = () => {
     }
   };
 
+  // Function to detect and validate path
+  const detectAndValidatePath = async () => {
+    try {
+      const isValid = await window.electronAPI.validatePath(settings.downloadPath);
+      if (!isValid) {
+        showNotification('Current download path is invalid or inaccessible', 'error');
+        // Auto-set to default path if current is invalid
+        const homeDir = await window.electronAPI.getHomeDirectory();
+        const defaultPath = homeDir + '/Downloads';
+        updateSetting('downloadPath', defaultPath);
+        showNotification('Reset to default download path', 'success');
+      } else {
+        showNotification('Download path is valid and accessible', 'success');
+      }
+    } catch (error) {
+      console.error('Error validating path:', error);
+      showNotification('Failed to validate path', 'error');
+    }
+  };
+
   return (
     <div className="relative p-6 space-y-6 max-w-4xl mx-auto">
       {/* Notification */}
@@ -329,27 +349,47 @@ const Settings = () => {
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
               📁 Download Location
             </label>
-            <div className="flex space-x-3">
+            <div className="flex flex-col space-y-3">
               <input
                 type="text"
                 value={settings.downloadPath}
                 readOnly
                 placeholder="Select your preferred download folder..."
-                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:border-transparent shadow-sm"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:border-transparent shadow-sm mb-3"
               />
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={selectDownloadPath}
-                className="px-6 py-3 bg-gradient-to-r from-gray-200 to-gray-300 dark:from-gray-600 dark:to-gray-500 hover:from-gray-300 hover:to-gray-400 dark:hover:from-gray-500 dark:hover:to-gray-400 text-gray-700 dark:text-gray-200 rounded-lg font-medium transition-all duration-200 shadow-sm"
-              >
-                <div className="flex items-center space-x-2">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  <span>Browse</span>
-                </div>
-              </motion.button>
+              <div className="flex space-x-3">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={async () => {
+                    const homeDir = await window.electronAPI.getHomeDirectory();
+                    const defaultPath = homeDir + '/Downloads';
+                    updateSetting('downloadPath', defaultPath);
+                    showNotification('Default download path set!', 'success');
+                  }}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-lg font-medium transition-all duration-200 shadow-sm"
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                    <span>Set Default</span>
+                  </div>
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={selectDownloadPath}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-gray-200 to-gray-300 dark:from-gray-600 dark:to-gray-500 hover:from-gray-300 hover:to-gray-400 dark:hover:from-gray-500 dark:hover:to-gray-400 text-gray-700 dark:text-gray-200 rounded-lg font-medium transition-all duration-200 shadow-sm"
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                    <span>Browse Folder</span>
+                  </div>
+                </motion.button>
+              </div>
             </div>
           </div>
 
@@ -363,10 +403,14 @@ const Settings = () => {
               onChange={(e) => updateSetting('videoQuality', e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:border-transparent shadow-sm"
             >
-              <option value="best">🏆 Best Quality</option>
-              <option value="720p">📺 720p HD</option>
-              <option value="480p">📱 480p</option>
-              <option value="360p">💾 360p (Small)</option>
+              <option value="best">🏆 Best Quality Available</option>
+              <option value="4320p">🌟 8K Ultra HD (4320p)</option>
+              <option value="2160p">💎 4K Ultra HD (2160p)</option>
+              <option value="1440p">🎯 2K QHD (1440p)</option>
+              <option value="1080p">🔥 Full HD (1080p)</option>
+              <option value="720p">📺 HD (720p)</option>
+              <option value="480p">📱 SD (480p)</option>
+              <option value="360p">💾 Low (360p)</option>
               <option value="worst">⚡ Fastest (Lowest)</option>
             </select>
           </div>
@@ -450,18 +494,18 @@ const Settings = () => {
           </div>
         </div>
 
-        <div className="mt-8 flex items-center justify-between">
+        <div className="mt-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="text-sm text-gray-600 dark:text-gray-400">
             💡 Settings are automatically saved and applied to future downloads
           </div>
-          <div className="flex items-center space-x-4">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => window.history.back()}
-              className="px-6 py-3 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg font-medium transition-all duration-200 shadow-lg"
+              className="w-full sm:w-auto px-6 py-3 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg font-medium transition-all duration-200 shadow-lg"
             >
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center justify-center space-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
@@ -473,15 +517,15 @@ const Settings = () => {
               whileTap={{ scale: 0.95 }}
               onClick={saveSettings}
               disabled={isSaving}
-              className="px-8 py-3 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full sm:w-auto min-w-[140px] px-8 py-3 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSaving ? (
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center justify-center space-x-2">
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   <span>Saving...</span>
                 </div>
               ) : (
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center justify-center space-x-2">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>

@@ -17,15 +17,36 @@ const MiniConsole = ({ isVisible, onToggle, downloadProgress }) => {
   useEffect(() => {
     if (downloadProgress) {
       const timestamp = new Date().toLocaleTimeString();
-      const newLog = {
-        id: Date.now(),
-        timestamp,
-        message: downloadProgress.message || downloadProgress,
-        type: downloadProgress.type || 'info',
-        progress: downloadProgress.progress
-      };
+      const message = downloadProgress.message || downloadProgress;
+      const type = downloadProgress.type || 'info';
+      const progress = downloadProgress.progress;
       
       setLogs(prev => {
+        // Check if this is a progress update that should replace the last log
+        if (type === 'progress' && prev.length > 0) {
+          const lastLog = prev[prev.length - 1];
+          // If the last log was also a progress update, replace it
+          if (lastLog.type === 'progress') {
+            const updated = [...prev.slice(0, -1), {
+              id: lastLog.id, // Keep same ID to maintain consistency
+              timestamp,
+              message,
+              type,
+              progress
+            }];
+            return updated.slice(-100);
+          }
+        }
+        
+        // For non-progress logs or when there's no previous progress log, add new log
+        const newLog = {
+          id: Date.now(),
+          timestamp,
+          message,
+          type,
+          progress
+        };
+        
         const updated = [...prev, newLog];
         // Keep only last 100 logs to prevent memory issues
         return updated.slice(-100);

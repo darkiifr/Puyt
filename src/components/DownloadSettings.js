@@ -1,13 +1,44 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const DownloadSettings = ({ downloadPath, onSelectFolder, onOpenFolder }) => {
+  const [showSavedNotification, setShowSavedNotification] = useState(false);
+  const [previousPath, setPreviousPath] = useState(downloadPath);
+
+  useEffect(() => {
+    // Show notification when download path changes (indicating it was saved)
+    if (downloadPath && downloadPath !== previousPath && previousPath !== '') {
+      setShowSavedNotification(true);
+      setTimeout(() => setShowSavedNotification(false), 3000);
+    }
+    setPreviousPath(downloadPath);
+  }, [downloadPath, previousPath]);
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl p-6 shadow-lg border border-gray-200 dark:border-gray-600"
-    >
+    <div className="relative">
+      {/* Saved Notification */}
+      <AnimatePresence>
+        {showSavedNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.9 }}
+            className="absolute top-0 right-0 z-10 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg mb-2"
+          >
+            <div className="flex items-center space-x-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-sm font-medium">📁 Download path saved!</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl p-6 shadow-lg border border-gray-200 dark:border-gray-600"
+      >
       <div className="flex items-center space-x-4 mb-4">
         <div className="p-3 rounded-full bg-white dark:bg-gray-800 shadow-md">
           <svg className="w-6 h-6 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -15,11 +46,21 @@ const DownloadSettings = ({ downloadPath, onSelectFolder, onOpenFolder }) => {
           </svg>
         </div>
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Download Location
-          </h3>
+          <div className="flex items-center space-x-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Download Location
+            </h3>
+            {downloadPath && (
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100">
+                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Saved
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Choose where to save your downloads
+            {downloadPath ? 'Your preferred download location is saved' : 'Choose where to save your downloads'}
           </p>
         </div>
       </div>
@@ -61,7 +102,8 @@ const DownloadSettings = ({ downloadPath, onSelectFolder, onOpenFolder }) => {
           </motion.button>
         )}
       </div>
-    </motion.div>
+      </motion.div>
+    </div>
   );
 };
 
