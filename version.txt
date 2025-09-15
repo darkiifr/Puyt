@@ -1,0 +1,11 @@
+{
+  "tag_name": "v1.2.8",
+  "name": "Puyt v1.2.8 - Beta Release",
+  "body": "## What's New\n\n### Core Features\n- YouTube video downloading with multiple format support\n- Batch download functionality\n- Modern desktop interface with dark/light theme\n- Built-in yt-dlp integration and management\n\n### Technical Improvements\n- Electron-based desktop application\n- React frontend with Tailwind CSS\n- Robust error handling and logging\n- Cross-platform compatibility (Windows, macOS, Linux)\n\n### Beta Release\nThis is a beta release of Puyt Desktop Application with core downloading functionality.",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2025-09-15T00:00:00Z",
+  "published_at": "2025-09-15T00:00:00Z",
+  "assets": [],
+  "channel": "beta"
+}

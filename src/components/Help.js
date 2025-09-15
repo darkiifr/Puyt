@@ -91,9 +91,18 @@ const Help = ({ onNavigate }) => {
                     </div>
                   </div>
                   <div>
-                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Method 2: Manual Installation</h4>
+                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Method 2: Using pip</h4>
+                    <div className="bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                      pip install yt-dlp
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Requires Python to be installed. Download from <a href="https://python.org" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">python.org</a>
+                    </p>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Method 3: Manual Installation</h4>
                     <ol className="list-decimal list-inside text-sm text-gray-600 dark:text-gray-300 space-y-1">
-                      <li>Download yt-dlp.exe from GitHub releases</li>
+                      <li>Download yt-dlp.exe from <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">GitHub releases</a></li>
                       <li>Place it in a folder (e.g., C:\\Tools\\)</li>
                       <li>Add the folder to your PATH environment variable</li>
                     </ol>
@@ -107,16 +116,22 @@ const Help = ({ onNavigate }) => {
                 </h3>
                 <div className="space-y-4">
                   <div>
-                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Using Homebrew (Recommended)</h4>
+                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Method 1: Using Homebrew (Recommended)</h4>
                     <div className="bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
                       brew install yt-dlp
                     </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Install Homebrew first from <a href="https://brew.sh" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">brew.sh</a>
+                    </p>
                   </div>
                   <div>
-                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Using pip</h4>
+                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Method 2: Using pip</h4>
                     <div className="bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
                       pip install yt-dlp
                     </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Python is usually pre-installed on macOS. If not, install from <a href="https://python.org" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">python.org</a>
+                    </p>
                   </div>
                 </div>
               </div>
@@ -143,6 +158,15 @@ const Help = ({ onNavigate }) => {
                     <div className="bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
                       sudo dnf install yt-dlp
                     </div>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Universal (pip)</h4>
+                    <div className="bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                      pip install yt-dlp
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Works on all Linux distributions. Install Python first: <code className="bg-gray-700 px-1 rounded text-xs">sudo apt install python3-pip</code> (Ubuntu/Debian) or equivalent
+                    </p>
                   </div>
                 </div>
               </div>

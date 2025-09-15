@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, forwardRef, useImperativeHandle } from 'react';
 import { motion } from 'framer-motion';
 import { useTheme } from '../contexts/ThemeContext';
 import Modal from './Modal';
@@ -8,9 +8,14 @@ import Help from './Help';
 import About from './About';
 import Settings from './Settings';
 
-const Header = ({ onNavigate }) => {
+const Header = forwardRef(({ onNavigate }, ref) => {
   const { isDark, toggleTheme } = useTheme();
   const [activeModal, setActiveModal] = useState(null);
+  
+  // Expose toggleTheme method to parent component
+  useImperativeHandle(ref, () => ({
+    toggleTheme
+  }));
 
   const openModal = (modalType) => {
     setActiveModal(modalType);
@@ -196,10 +201,10 @@ const Header = ({ onNavigate }) => {
         title="Settings"
         maxWidth="max-w-4xl"
       >
-        <Settings />
+        <Settings onNavigate={onNavigate} />
       </Modal>
     </motion.header>
   );
-};
+});
 
 export default Header;

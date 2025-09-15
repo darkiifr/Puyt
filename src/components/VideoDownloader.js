@@ -203,6 +203,7 @@ const VideoDownloader = () => {
         // Download completion is now handled by the event listener
       }
     } catch (err) {
+      console.error('Video download error:', err);
       const errorMessage = err.message || 'Download failed due to unknown error';
       const detailedError = `Download failed for "${videoInfo?.title || 'video'}": ${errorMessage}`;
       setError(detailedError);

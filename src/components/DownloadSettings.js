@@ -7,9 +7,16 @@ const DownloadSettings = ({ downloadPath, onSelectFolder, onOpenFolder }) => {
 
   useEffect(() => {
     // Show notification when download path changes (indicating it was saved)
-    if (downloadPath && downloadPath !== previousPath && previousPath !== '') {
-      setShowSavedNotification(true);
-      setTimeout(() => setShowSavedNotification(false), 3000);
+    // Only show if the path actually changed from a valid previous path
+    // and it's not the initial load
+    if (downloadPath && downloadPath !== previousPath && previousPath !== '' && previousPath !== null) {
+      // Add a small delay to ensure this is a user-initiated change, not a component mount
+      const timeoutId = setTimeout(() => {
+        setShowSavedNotification(true);
+        setTimeout(() => setShowSavedNotification(false), 3000);
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
     }
     setPreviousPath(downloadPath);
   }, [downloadPath, previousPath]);

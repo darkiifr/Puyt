@@ -19,6 +19,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectDownloadPath: () => ipcRenderer.invoke('select-download-path'),
   validatePath: (path) => ipcRenderer.invoke('validate-path', path),
   getHomeDirectory: () => ipcRenderer.invoke('get-home-directory'),
+  selectCookieFile: () => ipcRenderer.invoke('select-cookie-file'),
+  
+  // Update system APIs
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdates: (channel) => ipcRenderer.invoke('check-for-updates', channel),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  
+  // Automatic update APIs
+  getAutoUpdateSettings: () => ipcRenderer.invoke('get-auto-update-settings'),
+  setAutoUpdateSettings: (settings) => ipcRenderer.invoke('set-auto-update-settings', settings),
+  triggerManualUpdateCheck: (channel) => ipcRenderer.invoke('trigger-manual-update-check', channel),
+  
+  // Dependency Management APIs
+  checkDependencies: () => ipcRenderer.invoke('check-dependencies'),
+  installYtDlpNew: () => ipcRenderer.invoke('install-ytdlp'),
+  installFfmpeg: () => ipcRenderer.invoke('install-ffmpeg'),
+  getInstallationInstructions: () => ipcRenderer.invoke('get-installation-instructions'),
+  selectInstallationDirectory: () => ipcRenderer.invoke('select-installation-directory'),
   
   // Event listeners
   onDownloadProgress: (callback) => {
@@ -34,9 +53,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('download-complete', (event, data) => callback(data));
   },
   
+  // Update event listeners
+  onUpdateAvailable: (callback) => {
+    ipcRenderer.on('update-available', (event, data) => callback(data));
+  },
+  onUpdateNotAvailable: (callback) => {
+    ipcRenderer.on('update-not-available', (event, data) => callback(data));
+  },
+  onUpdateDownloadProgress: (callback) => {
+    ipcRenderer.on('update-download-progress', (event, data) => callback(data));
+  },
+  onUpdateDownloaded: (callback) => {
+    ipcRenderer.on('update-downloaded', (event, data) => callback(data));
+  },
+  onUpdateError: (callback) => {
+    ipcRenderer.on('update-error', (event, data) => callback(data));
+  },
+  onAutoUpdateNotification: (callback) => {
+    ipcRenderer.on('auto-update-notification', (event, data) => callback(data));
+  },
+  onInstallationProgress: (callback) => {
+    ipcRenderer.on('installation-progress', (event, data) => callback(data));
+  },
+  
   // Remove listeners
   removeAllListeners: (channel) => {
     ipcRenderer.removeAllListeners(channel);
+  },
+  
+  // Generic event listener management
+  on: (channel, callback) => {
+    ipcRenderer.on(channel, callback);
+  },
+  off: (channel, callback) => {
+    ipcRenderer.off(channel, callback);
   }
 });
 

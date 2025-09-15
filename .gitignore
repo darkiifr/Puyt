@@ -143,3 +143,89 @@ ffmpeg.exe
 # Application data
 app-data/
 user-settings.json
+
+# Security - Sensitive files (DO NOT COMMIT)
+# API Keys and Tokens
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+.env.*.local
+.env.secret
+.env.production
+.env.staging
+
+# GitHub and Git credentials
+.git-credentials
+.gitconfig.local
+
+# Authentication tokens
+auth-token*
+api-key*
+github-token*
+access-token*
+secret-key*
+private-key*
+
+# Database credentials
+database.json
+db-config.json
+connection-string*
+
+# Certificate files
+certificates/
+certs/
+ssl/
+
+# Backup files that might contain sensitive data
+*.backup
+*.bak
+*.old
+*.orig
+
+# Configuration files with secrets
+config.secret.json
+secrets.json
+credentials.json
+auth.json
+
+# IDE and editor files that might contain sensitive data
+.vscode/settings.json
+.vscode/launch.json
+.idea/workspace.xml
+.idea/tasks.xml
+
+# Windows credential files
+credential-store*
+windows-credentials*
+
+# macOS keychain files
+*.keychain
+*.keychain-db
+
+# SSH keys
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+*.ssh
+
+# GPG keys
+*.gpg
+*.asc
+secring.gpg
+pubring.gpg
+
+# Application-specific sensitive files
+user-tokens/
+private-configs/
+sensitive-data/
+
+# Temporary files that might contain sensitive data
+*.tmp.json
+*.temp.json
+*.secret.txt
+*.password.txt

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VideoDownloader from './components/VideoDownloader';
 import BatchDownloader from './components/BatchDownloader';
@@ -15,10 +15,70 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState('home');
   const [downloadMode, setDownloadMode] = useState('single'); // 'single' or 'batch'
+  
+  // Refs for keyboard shortcuts
+  const videoDownloaderRef = useRef(null);
+  const batchDownloaderRef = useRef(null);
+  const headerRef = useRef(null);
 
   useEffect(() => {
     checkYtDlpAvailability();
   }, []);
+  
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      // Ctrl+L - Focus URL input
+      if (event.ctrlKey && event.key === 'l') {
+        event.preventDefault();
+        if (currentPage === 'home') {
+          const urlInput = downloadMode === 'single' 
+            ? document.querySelector('input[placeholder*="URL"]')
+            : document.querySelector('textarea[placeholder*="URLs"]');
+          if (urlInput) {
+            urlInput.focus();
+            urlInput.select();
+          }
+        }
+      }
+      
+      // Ctrl+Enter - Get video info or analyze batch
+       if (event.ctrlKey && event.key === 'Enter') {
+         event.preventDefault();
+         if (currentPage === 'home') {
+           let analyzeButton;
+           if (downloadMode === 'single') {
+             // Look for "Get Video Info" button in single mode
+             analyzeButton = Array.from(document.querySelectorAll('button')).find(btn => 
+               btn.textContent.includes('Get Video Info') || btn.textContent.includes('Analyze')
+             );
+           } else {
+             // Look for "Analyze Batch" button in batch mode
+             analyzeButton = Array.from(document.querySelectorAll('button')).find(btn => 
+               btn.textContent.includes('Analyze Batch')
+             );
+           }
+           if (analyzeButton && !analyzeButton.disabled) {
+             analyzeButton.click();
+           }
+         }
+       }
+      
+      // Ctrl+Shift+T - Toggle theme
+      if (event.ctrlKey && event.shiftKey && event.key === 'T') {
+        event.preventDefault();
+        if (headerRef.current && headerRef.current.toggleTheme) {
+          headerRef.current.toggleTheme();
+        }
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [currentPage, downloadMode]);
 
   const checkYtDlpAvailability = async () => {
     try {
@@ -144,7 +204,7 @@ function App() {
     <ThemeProvider>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950">
         <div className="flex flex-col min-h-screen">
-          <Header onNavigate={handleNavigate} />
+          <Header ref={headerRef} onNavigate={handleNavigate} />
           
           <main className="flex-1 container mx-auto px-4 py-8">
             <AnimatePresence mode="wait">

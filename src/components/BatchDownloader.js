@@ -160,7 +160,19 @@ const BatchDownloader = () => {
         
         try {
           const videoInfo = await window.electronAPI.getVideoInfo(url);
-          batchResults.push({ url, info: videoInfo, status: 'ready' });
+          
+          // Check if this is a playlist URL on an unsupported platform
+          const isPlaylistUrl = url.includes('playlist') || url.includes('list=');
+          if (isPlaylistUrl && videoInfo.platform && !videoInfo.platform.supportsPlaylists) {
+            batchResults.push({ 
+              url, 
+              info: videoInfo, 
+              status: 'warning',
+              warning: `Playlist not supported on ${videoInfo.platform.name}. Only single video will be downloaded.`
+            });
+          } else {
+            batchResults.push({ url, info: videoInfo, status: 'ready' });
+          }
         } catch (error) {
           batchResults.push({ url, error: error.message, status: 'error' });
         }
@@ -169,14 +181,15 @@ const BatchDownloader = () => {
       setBatchInfo({
         results: batchResults,
         totalVideos: batchResults.reduce((sum, result) => {
-          if (result.info?.isPlaylist) {
+          if (result.info?.isPlaylist && result.status !== 'warning') {
             return sum + (result.info.videoCount || 0);
           }
-          return sum + (result.status === 'ready' ? 1 : 0);
+          return sum + (['ready', 'warning'].includes(result.status) ? 1 : 0);
         }, 0),
-        totalPlaylists: batchResults.filter(r => r.info?.isPlaylist).length,
-        totalSingleVideos: batchResults.filter(r => r.info && !r.info.isPlaylist).length,
-        errors: batchResults.filter(r => r.status === 'error').length
+        totalPlaylists: batchResults.filter(r => r.info?.isPlaylist && r.status !== 'warning').length,
+        totalSingleVideos: batchResults.filter(r => r.info && (!r.info.isPlaylist || r.status === 'warning')).length,
+        errors: batchResults.filter(r => r.status === 'error').length,
+        warnings: batchResults.filter(r => r.status === 'warning').length
       });
 
       setConsoleProgress({
@@ -205,7 +218,7 @@ const BatchDownloader = () => {
     
     try {
       const downloadOptions = {
-        items: batchInfo.results.filter(r => r.status === 'ready'),
+        items: batchInfo?.results?.filter(r => ['ready', 'warning'].includes(r.status)) || [],
         outputPath: downloadPath,
         ...dynamicParameters
       };
@@ -217,12 +230,16 @@ const BatchDownloader = () => {
 
       await window.electronAPI.downloadBatch(downloadOptions);
     } catch (error) {
-      setError(`Batch download failed: ${error.message}`);
+      console.error('Batch download error:', error);
+      const errorMessage = error.message || 'Unknown error occurred';
+      setError(`Batch download failed: ${errorMessage}`);
       setConsoleProgress({
-        message: `❌ Batch download failed: ${error.message}`,
+        message: `❌ Batch download failed: ${errorMessage}`,
         type: 'error'
       });
+    } finally {
       setIsDownloading(false);
+      setCurrentDownload(null);
     }
   };
 
@@ -391,10 +408,10 @@ const BatchDownloader = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Batch Analysis Results
               </h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
                 <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg">
                   <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                    {batchInfo.totalVideos}
+                    {batchInfo?.totalVideos || 0}
                   </div>
                   <div className="text-sm text-blue-600 dark:text-blue-400">
                     Total Videos
@@ -402,7 +419,7 @@ const BatchDownloader = () => {
                 </div>
                 <div className="bg-green-50 dark:bg-green-900/20 p-3 rounded-lg">
                   <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-                    {batchInfo.totalPlaylists}
+                    {batchInfo?.totalPlaylists || 0}
                   </div>
                   <div className="text-sm text-green-600 dark:text-green-400">
                     Playlists
@@ -410,15 +427,23 @@ const BatchDownloader = () => {
                 </div>
                 <div className="bg-purple-50 dark:bg-purple-900/20 p-3 rounded-lg">
                   <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                    {batchInfo.totalSingleVideos}
+                    {batchInfo?.totalSingleVideos || 0}
                   </div>
                   <div className="text-sm text-purple-600 dark:text-purple-400">
                     Single Videos
                   </div>
                 </div>
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 p-3 rounded-lg">
+                  <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+                    {batchInfo?.warnings || 0}
+                  </div>
+                  <div className="text-sm text-yellow-600 dark:text-yellow-400">
+                    Warnings
+                  </div>
+                </div>
                 <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
                   <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-                    {batchInfo.errors}
+                    {batchInfo?.errors || 0}
                   </div>
                   <div className="text-sm text-red-600 dark:text-red-400">
                     Errors
@@ -428,10 +453,12 @@ const BatchDownloader = () => {
               
               {/* Detailed Results */}
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {batchInfo.results.map((result, index) => (
+                {batchInfo?.results?.map((result, index) => (
                   <div key={index} className={`p-3 rounded-lg border ${
                     result.status === 'ready' 
                       ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                      : result.status === 'warning'
+                      ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
                       : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
                   }`}>
                     <div className="flex items-start justify-between">
@@ -440,20 +467,32 @@ const BatchDownloader = () => {
                           {result.info?.title || result.url.substring(0, 50) + '...'}
                         </div>
                         <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          {result.info?.isPlaylist ? `Playlist (${result.info.videoCount} videos)` : 'Single Video'}
+                          {result.info?.platform && (
+                            <span className="inline-block mr-2 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs">
+                              {result.info.platform.name}
+                            </span>
+                          )}
+                          {result.info?.isPlaylist && result.status !== 'warning' ? `Playlist (${result.info.videoCount} videos)` : 'Single Video'}
                         </div>
                         {result.error && (
                           <div className="text-xs text-red-600 dark:text-red-400 mt-1">
                             Error: {result.error}
                           </div>
                         )}
+                        {result.warning && (
+                          <div className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                            ⚠️ {result.warning}
+                          </div>
+                        )}
                       </div>
                       <div className={`px-2 py-1 rounded text-xs font-medium ${
                         result.status === 'ready'
                           ? 'bg-green-100 dark:bg-green-800 text-green-800 dark:text-green-200'
+                          : result.status === 'warning'
+                          ? 'bg-yellow-100 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200'
                           : 'bg-red-100 dark:bg-red-800 text-red-800 dark:text-red-200'
                       }`}>
-                        {result.status === 'ready' ? 'Ready' : 'Error'}
+                        {result.status === 'ready' ? 'Ready' : result.status === 'warning' ? 'Warning' : 'Error'}
                       </div>
                     </div>
                   </div>
@@ -596,13 +635,13 @@ const BatchDownloader = () => {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleBatchDownload}
-              disabled={!downloadPath || batchInfo.results.filter(r => r.status === 'ready').length === 0}
+              disabled={!downloadPath || !batchInfo?.results?.filter(r => r.status === 'ready').length}
               className="btn-primary px-8 py-3 text-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              Download Batch ({batchInfo.results.filter(r => r.status === 'ready').length} items)
+              Download Batch ({batchInfo?.results?.filter(r => r.status === 'ready').length || 0} items)
             </motion.button>
           </motion.div>
         )}

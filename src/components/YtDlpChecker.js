@@ -54,26 +54,57 @@ const YtDlpChecker = ({ onInstalled }) => {
     setIsInstalling(true);
     setInstallMessage('Installing yt-dlp... This may take a few minutes.');
     
+    // Listen for installation progress
+    const handleProgress = (event, data) => {
+      if (data.tool === 'yt-dlp') {
+        setInstallMessage(data.message);
+      }
+    };
+    
+    if (window.electronAPI && window.electronAPI.onInstallationProgress) {
+      window.electronAPI.onInstallationProgress(handleProgress);
+    }
+    
     try {
       if (window.electronAPI) {
-        const result = await window.electronAPI.installYtDlp();
+        // Use the correct IPC handler name
+        const result = await window.electronAPI.invoke('install-ytdlp');
         
         if (result.success) {
-          setInstallMessage(result.message + ' Restarting application...');
+          setInstallMessage(`✅ ${result.message || 'yt-dlp installed successfully!'} Please restart the application.`);
           
-          // Wait a moment then restart the app
+          // Auto-recheck after successful installation
           setTimeout(async () => {
-            await window.electronAPI.restartApp();
-          }, 2000);
+            await handleRecheck();
+          }, 1000);
         } else {
-          setInstallMessage(result.message);
+          let errorMessage = `❌ Installation failed: ${result.error || 'Unknown error'}`;
+          
+          // Add suggestions if available
+          if (result.suggestions && result.suggestions.length > 0) {
+            errorMessage += '\n\nSuggestions:';
+            result.suggestions.forEach((suggestion, index) => {
+              errorMessage += `\n${index + 1}. ${suggestion}`;
+            });
+          } else {
+            errorMessage += '\n\nPlease try installing manually using: pip install yt-dlp';
+          }
+          
+          setInstallMessage(errorMessage);
         }
+      } else {
+        setInstallMessage('❌ Installation failed: Electron API not available.');
       }
     } catch (error) {
       console.error('Error installing yt-dlp:', error);
-      setInstallMessage(`Installation failed: ${error.message || 'Unknown installation error'}. Please try installing manually or check your internet connection.`);
+      setInstallMessage(`❌ Installation failed: ${error.message || 'Network or system error'}.\n\nSuggestions:\n1. Check your internet connection\n2. Try manual installation: pip install yt-dlp\n3. Restart the application and try again`);
     } finally {
       setIsInstalling(false);
+      
+      // Clean up progress listener
+      if (window.electronAPI && window.electronAPI.removeInstallationProgressListener) {
+        window.electronAPI.removeInstallationProgressListener(handleProgress);
+      }
     }
   };
 
@@ -123,32 +154,68 @@ const YtDlpChecker = ({ onInstalled }) => {
           <div className="space-y-4">
             {/* Windows */}
             <div>
-              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Windows:</h4>
-              <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
-                winget install yt-dlp
+              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">🪟 Windows:</h4>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Recommended:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    winget install yt-dlp
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Using pip:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    pip install yt-dlp
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Or download from <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">GitHub releases</a>
+                </p>
               </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Or download from GitHub releases and add to PATH
-              </p>
             </div>
 
             {/* macOS */}
             <div>
-              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">macOS:</h4>
-              <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
-                brew install yt-dlp
+              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">🍎 macOS:</h4>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Homebrew:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    brew install yt-dlp
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Using pip:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    pip install yt-dlp
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Linux */}
             <div>
-              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Linux:</h4>
-              <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
-                sudo apt install yt-dlp
+              <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">🐧 Linux:</h4>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Ubuntu/Debian:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    sudo apt install yt-dlp
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Fedora/RHEL:</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    sudo dnf install yt-dlp
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Universal (pip):</span>
+                  <div className="bg-gray-900 dark:bg-gray-900 rounded-md p-3 font-mono text-sm text-green-400">
+                    pip install yt-dlp
+                  </div>
+                </div>
               </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Or use your distribution's package manager
-              </p>
             </div>
           </div>
         </div>

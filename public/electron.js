@@ -1,9 +1,15 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const https = require('https');
+const { promisify } = require('util');
+const { pipeline } = require('stream');
+const crypto = require('crypto');
+const pipelineAsync = promisify(pipeline);
+const DependencyManager = require('../scripts/dependency-manager');
 
 // Conditionally require YtDlpInstaller only in development
 let YtDlpInstaller;
@@ -15,6 +21,7 @@ try {
 }
 
 let mainWindow;
+let dependencyManager = new DependencyManager();
 
 function createWindow() {
   // Remove the default menu bar
@@ -48,6 +55,13 @@ function createWindow() {
     if (isDev) {
       mainWindow.webContents.openDevTools();
     }
+    
+    // Suppress DevTools console errors
+    mainWindow.webContents.on('console-message', (event, level, message) => {
+      if (message.includes('Autofill.enable') || message.includes('Autofill.setAddresses')) {
+        event.preventDefault();
+      }
+    });
   });
 
   mainWindow.on('closed', () => {
@@ -55,7 +69,11 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow).catch((error) => {
+app.whenReady().then(() => {
+  createWindow();
+  // Start automatic update checker after app is ready
+  startAutoUpdateChecker();
+}).catch((error) => {
   console.error('Failed to create window:', error);
   app.quit();
 });
@@ -69,6 +87,132 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+// IPC Handlers for Dependency Management
+ipcMain.handle('check-dependencies', async () => {
+  const ytdlpCheck = dependencyManager.checkYtDlp();
+  const ffmpegCheck = dependencyManager.checkFfmpeg();
+  
+  return {
+    ytdlp: ytdlpCheck,
+    ffmpeg: ffmpegCheck
+  };
+});
+
+ipcMain.handle('install-ytdlp', async (event) => {
+  try {
+    // Check if already installed
+    const existingCheck = dependencyManager.checkYtDlp();
+    if (existingCheck.available) {
+      event.sender.send('installation-progress', { tool: 'yt-dlp', message: '✅ yt-dlp is already installed!' });
+      return { success: true, message: 'yt-dlp is already available', path: existingCheck.path };
+    }
+    
+    // Check internet connectivity
+    event.sender.send('installation-progress', { tool: 'yt-dlp', message: '🌐 Checking internet connection...' });
+    
+    const result = await dependencyManager.installYtDlp((progress) => {
+      event.sender.send('installation-progress', { tool: 'yt-dlp', message: progress });
+    });
+    
+    // Final verification
+    const finalCheck = dependencyManager.checkYtDlp();
+    if (!finalCheck.available) {
+      throw new Error('Installation completed but yt-dlp is not accessible. Please restart the application.');
+    }
+    
+    return { success: true, message: 'yt-dlp installed successfully', ...result };
+  } catch (error) {
+    console.error('yt-dlp installation error:', error);
+    
+    let errorMessage = error.message;
+    let suggestions = [];
+    
+    // Provide specific error messages and suggestions
+    if (error.message.includes('ENOTFOUND') || error.message.includes('network')) {
+      errorMessage = 'Network connection failed. Please check your internet connection.';
+      suggestions = [
+        'Check your internet connection',
+        'Try again in a few moments',
+        'Consider manual installation using pip: pip install yt-dlp'
+      ];
+    } else if (error.message.includes('EACCES') || error.message.includes('permission')) {
+      errorMessage = 'Permission denied. Please run the application as administrator.';
+      suggestions = [
+        'Run the application as administrator',
+        'Check folder permissions',
+        'Try manual installation: pip install yt-dlp'
+      ];
+    } else if (error.message.includes('ENOSPC')) {
+      errorMessage = 'Insufficient disk space for installation.';
+      suggestions = [
+        'Free up disk space',
+        'Try installing to a different location'
+      ];
+    } else if (error.message.includes('timeout')) {
+      errorMessage = 'Download timeout. The server may be busy.';
+      suggestions = [
+        'Try again in a few minutes',
+        'Check your internet connection speed',
+        'Consider manual installation: pip install yt-dlp'
+      ];
+    } else {
+      suggestions = [
+        'Try manual installation: pip install yt-dlp',
+        'Check the Help section for detailed instructions',
+        'Restart the application and try again'
+      ];
+    }
+    
+    event.sender.send('installation-progress', { 
+      tool: 'yt-dlp', 
+      message: `❌ Installation failed: ${errorMessage}`,
+      error: true,
+      suggestions
+    });
+    
+    return { 
+      success: false, 
+      error: errorMessage,
+      suggestions,
+      details: error.message
+    };
+  }
+});
+
+ipcMain.handle('install-ffmpeg', async (event) => {
+  try {
+    const result = await dependencyManager.installFfmpeg((progress) => {
+      event.sender.send('installation-progress', { tool: 'ffmpeg', message: progress });
+    });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-installation-instructions', async () => {
+  return dependencyManager.getInstallationInstructions();
+});
+
+// Handler for selecting custom installation directory
+ipcMain.handle('select-installation-directory', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Installation Directory',
+      defaultPath: path.join(os.homedir(), 'AppData', 'Local')
+    });
+    
+    if (!result.canceled && result.filePaths.length > 0) {
+      return result.filePaths[0];
+    }
+    return null;
+  } catch (error) {
+    console.error('Error selecting installation directory:', error);
+    return { error: `Failed to open directory dialog: ${error.message || 'Dialog system error'}` };
   }
 });
 
@@ -92,14 +236,35 @@ ipcMain.handle('get-video-info', async (event, url) => {
       return;
     }
 
+    // Detect platform and check playlist support
+    const platformInfo = detectPlatformType(url);
+    
     // Check if URL is a playlist
     const isPlaylist = url.includes('playlist?list=') || url.includes('&list=');
     
+    // Only allow playlist mode for supported platforms
+    const allowPlaylist = isPlaylist && platformInfo.supportsPlaylists;
+    
+    // Load settings for cookie configuration
+    let settings = {};
+    try {
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      if (fs.existsSync(settingsPath)) {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      }
+    } catch (error) {
+      console.warn('Could not load settings for cookie configuration:', error.message);
+    }
+    
     const args = [
       '--dump-json',
-      isPlaylist ? '--yes-playlist' : '--no-playlist',
-      url
+      allowPlaylist ? '--yes-playlist' : '--no-playlist'
     ];
+    
+
+    
+    // Add URL last
+    args.push(url);
     
     const process = spawn(ytDlpPath, args);
 
@@ -142,7 +307,7 @@ ipcMain.handle('get-video-info', async (event, url) => {
           }
           
           // If it's a single video, return single video format
-          if (videos.length === 1 && !isPlaylist) {
+          if (videos.length === 1 && !allowPlaylist) {
             const videoInfo = videos[0];
             resolve({
               title: videoInfo.title,
@@ -151,6 +316,7 @@ ipcMain.handle('get-video-info', async (event, url) => {
               uploader: videoInfo.uploader,
               url: videoInfo.webpage_url || url,
               isPlaylist: false,
+              platform: platformInfo,
               formats: (() => {
               if (!videoInfo.formats) return [];
               
@@ -228,6 +394,7 @@ ipcMain.handle('get-video-info', async (event, url) => {
               isPlaylist: true,
               videoCount: videos.length,
               videos: playlistVideos,
+              platform: platformInfo,
               formats: [] // Playlists don't have formats, individual videos do
             });
           }
@@ -336,31 +503,78 @@ function parseTimeToSeconds(timeString) {
 function detectPlatformType(url) {
   const urlLower = url.toLowerCase();
   
-  // YouTube and related
+  // YouTube and related - Full playlist support
   if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be')) {
-    return 'youtube';
+    return {
+      type: 'youtube',
+      supportsPlaylists: true,
+      name: 'YouTube'
+    };
   }
   
-  // Social media platforms that work better with FFmpeg
+  // Vimeo - Limited playlist support
+  if (urlLower.includes('vimeo.com')) {
+    return {
+      type: 'vimeo',
+      supportsPlaylists: true,
+      name: 'Vimeo'
+    };
+  }
+  
+  // Dailymotion - Playlist support
+  if (urlLower.includes('dailymotion.com')) {
+    return {
+      type: 'dailymotion',
+      supportsPlaylists: true,
+      name: 'Dailymotion'
+    };
+  }
+  
+  // Twitch - VOD collections support
+  if (urlLower.includes('twitch.tv')) {
+    return {
+      type: 'twitch',
+      supportsPlaylists: true,
+      name: 'Twitch'
+    };
+  }
+  
+  // Social media platforms - No playlist support
   if (urlLower.includes('tiktok.com') || urlLower.includes('discord.com') || 
       urlLower.includes('instagram.com') || urlLower.includes('twitter.com') ||
       urlLower.includes('x.com') || urlLower.includes('facebook.com') ||
-      urlLower.includes('twitch.tv') || urlLower.includes('reddit.com')) {
-    return 'social';
+      urlLower.includes('reddit.com')) {
+    return {
+      type: 'social',
+      supportsPlaylists: false,
+      name: 'Social Media'
+    };
   }
   
-  // Direct video links
+  // Direct video links - No playlist support
   if (urlLower.match(/\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/)) {
-    return 'direct';
+    return {
+      type: 'direct',
+      supportsPlaylists: false,
+      name: 'Direct Video'
+    };
   }
   
-  // Live streams
+  // Live streams - No playlist support
   if (urlLower.includes('m3u8') || urlLower.includes('rtmp') || urlLower.includes('rtsp')) {
-    return 'stream';
+    return {
+      type: 'stream',
+      supportsPlaylists: false,
+      name: 'Live Stream'
+    };
   }
   
-  // Other platforms
-  return 'other';
+  // Other platforms - Unknown playlist support
+  return {
+    type: 'other',
+    supportsPlaylists: false,
+    name: 'Other Platform'
+  };
 }
 
 function downloadWithFfmpeg(url, outputPath, options = {}) {
@@ -378,24 +592,38 @@ function downloadWithFfmpeg(url, outputPath, options = {}) {
     } = options;
 
     // Check if ffmpeg is available
-    const ffmpegProcess = spawn('ffmpeg', ['-version']);
+    const ffmpegCheck = dependencyManager.checkFfmpeg();
+    if (!ffmpegCheck.available) {
+      reject(new Error('FFmpeg not found. Please install FFmpeg or use the auto-installer in Settings.'));
+      return;
+    }
     
-    ffmpegProcess.on('error', () => {
-      reject(new Error('FFmpeg not found. Please install FFmpeg to use as fallback.'));
-    });
-    
-    ffmpegProcess.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error('FFmpeg not available or not working properly'));
-        return;
-      }
+    console.log(`Found FFmpeg (${ffmpegCheck.source}):`, ffmpegCheck.path);
       
       // For YouTube URLs, try to get direct stream URLs using yt-dlp first
       if (url.includes('youtube.com') || url.includes('youtu.be')) {
         // Use yt-dlp to get stream URLs without downloading
         const ytDlpPath = getYtDlpPath();
         if (ytDlpPath) {
-          const getUrlProcess = spawn(ytDlpPath, ['-g', '--no-warnings', url]);
+          // Load settings for cookie configuration
+          let settings = {};
+          try {
+            const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+            if (fs.existsSync(settingsPath)) {
+              settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            }
+          } catch (error) {
+            console.warn('Could not load settings for cookie configuration:', error.message);
+          }
+          
+          const args = ['-g', '--no-warnings'];
+          
+
+          
+          // Add URL last
+          args.push(url);
+          
+          const getUrlProcess = spawn(ytDlpPath, args);
           let streamUrls = '';
           
           getUrlProcess.stdout.on('data', (data) => {
@@ -422,7 +650,6 @@ function downloadWithFfmpeg(url, outputPath, options = {}) {
       } else {
         downloadWithFfmpegDirect(url, outputPath, options, resolve, reject);
       }
-    });
   });
 }
 
@@ -504,7 +731,8 @@ function downloadWithFfmpegDirect(url, outputPath, options, resolve, reject) {
       args.push('-y'); // Overwrite output file
       args.push(outputFile);
       
-      const downloadProcess = spawn('ffmpeg', args);
+      const ffmpegPath = dependencyManager.checkFfmpeg().path;
+      const downloadProcess = spawn(ffmpegPath, args);
       let processCompleted = false;
       let totalDuration = null;
       
@@ -816,6 +1044,19 @@ ipcMain.handle('download-video', async (event, options) => {
       args.push('--download-sections', timeRange);
     }
 
+    // Load settings for cookie configuration
+    let settings = {};
+    try {
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      if (fs.existsSync(settingsPath)) {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      }
+    } catch (error) {
+      console.warn('Could not load settings for cookie configuration:', error.message);
+    }
+    
+
+    
     // Add custom arguments
     if (customArgs.trim()) {
       const customArgsArray = customArgs.trim().split(/\s+/);
@@ -1014,14 +1255,28 @@ ipcMain.handle('download-video', async (event, options) => {
         } catch (killError) {
           console.log('Process already terminated');
         }
+        cleanup();
         return;
       }
       
       mainWindow.webContents.send('download-error', { error });
     });
 
+    const cleanup = () => {
+      try {
+        process.removeAllListeners('data');
+        process.removeAllListeners('error');
+        process.removeAllListeners('close');
+        if (process.stdout) process.stdout.removeAllListeners('data');
+        if (process.stderr) process.stderr.removeAllListeners('data');
+      } catch (cleanupError) {
+        console.log('Process cleanup error:', cleanupError.message);
+      }
+    };
+
     process.on('close', async (code) => {
       console.log('yt-dlp process closed with code:', code);
+      cleanup();
       if (code === 0) {
         // Verify that the file was actually created
         try {
@@ -1063,6 +1318,7 @@ ipcMain.handle('download-video', async (event, options) => {
           mainWindow.webContents.send('download-error', { 
             error: `Download completed but file verification failed: ${verificationError.message}` 
           });
+          cleanup();
           reject(new Error(`File verification failed: ${verificationError.message}`));
         }
       } else {
@@ -1110,6 +1366,7 @@ ipcMain.handle('download-video', async (event, options) => {
           mainWindow.webContents.send('download-error', { 
             error: `Both yt-dlp and ffmpeg failed: ${ffmpegError.message}` 
           });
+          cleanup();
           reject(new Error(`Download failed: yt-dlp (code ${code}) and ffmpeg fallback failed: ${ffmpegError.message}`));
         }
       }
@@ -1130,23 +1387,7 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
   shell.openPath(folderPath);
 });
 
-ipcMain.handle('install-ytdlp', async (event) => {
-  try {
-    if (!YtDlpInstaller) {
-      return { success: false, error: 'YtDlpInstaller not available in production build' };
-    }
-    
-    const installer = new YtDlpInstaller();
-    
-    const result = await installer.install((message) => {
-      event.sender.send('ytdlp-install-progress', message);
-    });
-    
-    return { success: true, message: `yt-dlp ${result.version} installed successfully!`, path: result.path };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
+
 
 ipcMain.handle('update-ytdlp', async (event) => {
   try {
@@ -1256,29 +1497,92 @@ ipcMain.handle('validate-path', async (event, pathToValidate) => {
 ipcMain.handle('get-settings', async () => {
   try {
     const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      return settings;
+    
+    // Ensure the userData directory exists
+    const userDataDir = app.getPath('userData');
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
     }
-    return {
+    
+    if (fs.existsSync(settingsPath)) {
+      const settingsData = fs.readFileSync(settingsPath, 'utf8');
+      if (settingsData.trim()) {
+        const settings = JSON.parse(settingsData);
+        return { success: true, data: settings };
+      }
+    }
+    
+    // Return default settings
+    const defaultSettings = {
       downloadPath: path.join(os.homedir(), 'Downloads'),
       videoQuality: 'best',
       audioFormat: 'mp3',
       videoFormat: 'mp4'
     };
+    return { success: true, data: defaultSettings };
   } catch (error) {
     console.error('Error loading settings:', error);
-    return { error: `Failed to load settings: ${error.message || 'File read error'}` };
+    return { success: false, error: `Failed to load settings: ${error.message || 'File read error'}` };
   }
 });
 
 ipcMain.handle('save-settings', async (event, settings) => {
   try {
+    if (!settings || typeof settings !== 'object') {
+      return { success: false, error: 'Invalid settings data provided' };
+    }
+    
     const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    return true;
+    
+    // Ensure the userData directory exists
+    const userDataDir = app.getPath('userData');
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    }
+    
+    // Create backup of existing settings
+    if (fs.existsSync(settingsPath)) {
+      const backupPath = settingsPath + '.backup';
+      try {
+        fs.copyFileSync(settingsPath, backupPath);
+      } catch (backupError) {
+        console.warn('Failed to create settings backup:', backupError);
+        // Continue with save operation even if backup fails
+      }
+    }
+    
+    // Write new settings
+    const settingsData = JSON.stringify(settings, null, 2);
+    fs.writeFileSync(settingsPath, settingsData, 'utf8');
+    
+    // Verify the file was written correctly
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const verifyData = fs.readFileSync(settingsPath, 'utf8');
+        JSON.parse(verifyData); // Validate JSON structure
+      } catch (verifyError) {
+        throw new Error('Settings file verification failed - corrupted data');
+      }
+    } else {
+      throw new Error('Settings file was not created');
+    }
+    
+    return { success: true, message: 'Settings saved successfully' };
   } catch (error) {
     console.error('Error saving settings:', error);
+    
+    // Try to restore backup if it exists
+    const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+    const backupPath = settingsPath + '.backup';
+    if (fs.existsSync(backupPath)) {
+      try {
+        fs.copyFileSync(backupPath, settingsPath);
+        console.log('Settings restored from backup');
+      } catch (restoreError) {
+        console.error('Failed to restore settings backup:', restoreError);
+      }
+    }
+    
     return { success: false, error: `Failed to save settings: ${error.message || 'File write error'}` };
   }
 });
@@ -1291,14 +1595,559 @@ ipcMain.handle('select-download-path', async () => {
     });
     
     if (!result.canceled && result.filePaths.length > 0) {
-      return result.filePaths[0];
+      return {
+        canceled: false,
+        filePath: result.filePaths[0]
+      };
     }
-    return null;
+    return {
+      canceled: true,
+      filePath: null
+    };
   } catch (error) {
     console.error('Error selecting download path:', error);
-    return { error: `Failed to open folder dialog: ${error.message || 'Dialog system error'}` };
+    return { 
+      canceled: true,
+      filePath: null,
+      error: `Failed to open folder dialog: ${error.message || 'Dialog system error'}` 
+    };
   }
 });
+
+
+
+// Update System Variables
+let updateInfo = null;
+let isCheckingForUpdates = false;
+let isDownloadingUpdate = false;
+
+// Automatic update checker configuration
+let autoUpdateInterval = null;
+let autoUpdateSettings = {
+  enabled: true,
+  interval: 4 * 60 * 60 * 1000, // 4 hours in milliseconds
+  channel: 'stable',
+  silent: true, // Don't show notifications for automatic checks
+  autoDownload: false // Whether to automatically download updates in silent mode
+};
+
+// Function to read version from version.txt (GitHub format)
+function getVersionInfo() {
+  try {
+    const versionPath = path.join(__dirname, '../version.txt');
+    if (fs.existsSync(versionPath)) {
+      const versionContent = fs.readFileSync(versionPath, 'utf8').trim();
+      const releaseInfo = JSON.parse(versionContent);
+      
+      return {
+        version: releaseInfo.tag_name?.replace('v', '') || app.getVersion(),
+        channel: releaseInfo.channel || (releaseInfo.prerelease ? 'beta' : 'stable'),
+        date: releaseInfo.published_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+        description: releaseInfo.name || 'Puyt Desktop Application',
+        notes: releaseInfo.body || 'No release notes available',
+        draft: releaseInfo.draft || false,
+        prerelease: releaseInfo.prerelease || false
+      };
+    }
+  } catch (error) {
+    console.error('Error reading version.txt:', error);
+    // Try legacy format fallback
+    try {
+      const versionPath = path.join(__dirname, '../version.txt');
+      const versionContent = fs.readFileSync(versionPath, 'utf8').trim().split('\n');
+      if (versionContent.length >= 2) {
+        return {
+          version: versionContent[0] || app.getVersion(),
+          channel: versionContent[1] || 'stable',
+          date: versionContent[2] || new Date().toISOString().split('T')[0],
+          description: versionContent[3] || 'Puyt Desktop Application',
+          notes: versionContent[4] || 'No release notes available'
+        };
+      }
+    } catch (legacyError) {
+      console.error('Error reading legacy version format:', legacyError);
+    }
+  }
+  
+  // Fallback to package.json version
+  return {
+    version: app.getVersion(),
+    channel: 'stable',
+    date: new Date().toISOString().split('T')[0],
+    description: 'Puyt Desktop Application',
+    notes: 'No release notes available'
+  };
+}
+
+// Get app version
+ipcMain.handle('get-app-version', async () => {
+  return getVersionInfo();
+});
+
+// Check for updates
+ipcMain.handle('check-for-updates', async (event, channel = 'stable') => {
+  if (isCheckingForUpdates) {
+    throw new Error('Update check already in progress');
+  }
+
+  isCheckingForUpdates = true;
+  updateInfo = null;
+
+  try {
+    const currentVersion = app.getVersion();
+    const releases = await fetchGitHubReleases(channel);
+    
+    if (releases.length === 0) {
+      mainWindow.webContents.send('update-not-available');
+      return { available: false, message: 'No releases found' };
+    }
+
+    const latestRelease = releases[0];
+    const latestVersion = latestRelease.tag_name.replace(/^v/, '');
+    
+    if (compareVersions(latestVersion, currentVersion) > 0) {
+      updateInfo = {
+        version: latestVersion,
+        downloadUrl: getDownloadUrl(latestRelease),
+        releaseNotes: latestRelease.body || 'No release notes available',
+        publishedAt: latestRelease.published_at,
+        channel: channel
+      };
+      
+      mainWindow.webContents.send('update-available', updateInfo);
+      return { available: true, updateInfo };
+    } else {
+      mainWindow.webContents.send('update-not-available');
+      return { available: false, message: 'You are running the latest version' };
+    }
+  } catch (error) {
+    console.error('Error checking for updates:', error);
+    mainWindow.webContents.send('update-error', { message: error.message });
+    throw error;
+  } finally {
+    isCheckingForUpdates = false;
+  }
+});
+
+// Download update
+ipcMain.handle('download-update', async (event) => {
+  if (!updateInfo) {
+    throw new Error('No update available to download');
+  }
+
+  if (isDownloadingUpdate) {
+    throw new Error('Update download already in progress');
+  }
+
+  isDownloadingUpdate = true;
+
+  try {
+    const downloadPath = path.join(app.getPath('temp'), `puyt-update-${updateInfo.version}.exe`);
+    
+    await downloadFile(updateInfo.downloadUrl, downloadPath, (progress) => {
+      // Enhanced progress with retry info, speed, and ETA
+      const progressData = {
+        percent: typeof progress === 'number' ? progress : progress.percent,
+        downloadedBytes: progress.downloadedBytes || 0,
+        totalBytes: progress.totalBytes || 0,
+        speed: progress.speed || 0,
+        eta: progress.eta || 0,
+        attempt: progress.attempt || 1
+      };
+      mainWindow.webContents.send('update-download-progress', progressData);
+    }, {
+      maxRetries: 5,
+      retryDelay: 3000,
+      timeout: 60000,
+      resumeSupport: true
+    });
+
+    updateInfo.localPath = downloadPath;
+    mainWindow.webContents.send('update-downloaded', updateInfo);
+    
+    return { success: true, path: downloadPath };
+  } catch (error) {
+    console.error('Error downloading update:', error);
+    mainWindow.webContents.send('update-error', { message: error.message });
+    throw error;
+  } finally {
+    isDownloadingUpdate = false;
+  }
+});
+
+// Install update
+ipcMain.handle('install-update', async (event) => {
+  if (!updateInfo || !updateInfo.localPath) {
+    throw new Error('No update downloaded');
+  }
+
+  try {
+    // Launch the installer
+    const { spawn } = require('child_process');
+    spawn(updateInfo.localPath, [], {
+      detached: true,
+      stdio: 'ignore'
+    });
+
+    // Quit the current app
+    app.quit();
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error installing update:', error);
+    mainWindow.webContents.send('update-error', { message: error.message });
+    throw error;
+  }
+});
+
+// Helper functions for update system
+async function fetchGitHubReleases(channel) {
+  return new Promise((resolve, reject) => {
+    // GitHub repository configuration (hardcoded for public repository)
+    const REPO_OWNER = 'vinssoftware';
+    const REPO_NAME = 'puyt';
+    
+    console.log(`🔍 Checking for updates from GitHub repository: ${REPO_OWNER}/${REPO_NAME}`);
+    
+    // For local development, return empty releases to avoid API errors
+    if (isDev) {
+      console.log('🔧 Development mode: Skipping update check');
+      resolve([]);
+      return;
+    }
+    
+    const headers = {
+      'User-Agent': 'Puyt-App',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+    
+    const options = {
+      hostname: 'api.github.com',
+      path: `/repos/${REPO_OWNER}/${REPO_NAME}/releases`,
+      method: 'GET',
+      headers: headers
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      
+      res.on('end', () => {
+        try {
+          // Check if response is empty or invalid
+          if (!data || data.trim() === '') {
+            reject(new Error('Empty response from GitHub API'));
+            return;
+          }
+          
+          // Check for GitHub API error responses
+          if (res.statusCode !== 200) {
+            let errorMessage = `GitHub API returned status ${res.statusCode}`;
+            
+            // Handle specific error cases for public repository access
+            if (res.statusCode === 403) {
+              errorMessage = 'GitHub API rate limit exceeded. Please try again later or check your internet connection.';
+            } else if (res.statusCode === 404) {
+              errorMessage = 'Repository not found. The repository may have been moved or deleted.';
+            } else if (res.statusCode === 422) {
+              errorMessage = 'Invalid request to GitHub API. Please check the repository configuration.';
+            } else if (res.statusCode >= 500) {
+              errorMessage = 'GitHub API server error. Please try again later.';
+            } else {
+              errorMessage += `: ${data.substring(0, 200)}`; // Truncate long error messages
+            }
+            
+            console.error(`🚫 GitHub API error: ${res.statusCode}`, data.substring(0, 500));
+            reject(new Error(errorMessage));
+            return;
+          }
+          
+          const releases = JSON.parse(data);
+          
+          // Validate that releases is an array
+          if (!Array.isArray(releases)) {
+            reject(new Error('Invalid GitHub API response format'));
+            return;
+          }
+          
+          const filteredReleases = releases.filter(release => {
+            // Validate release object structure
+            if (!release || !release.tag_name) {
+              return false;
+            }
+            
+            const tagName = release.tag_name.toLowerCase();
+            
+            switch (channel) {
+              case 'alpha':
+                return tagName.includes('alpha') || tagName.includes('beta') || (!tagName.includes('alpha') && !tagName.includes('beta'));
+              case 'beta':
+                return tagName.includes('beta') || (!tagName.includes('alpha') && !tagName.includes('beta'));
+              case 'stable':
+              default:
+                return !tagName.includes('alpha') && !tagName.includes('beta');
+            }
+          });
+          
+          resolve(filteredReleases);
+        } catch (error) {
+          console.error('GitHub API parsing error:', error.message);
+          console.error('Response data:', data.substring(0, 500)); // Log first 500 chars for debugging
+          reject(new Error(`Failed to parse GitHub API response: ${error.message}`));
+        }
+      });
+    });
+    
+    req.on('error', (error) => {
+      reject(new Error(`GitHub API request failed: ${error.message}`));
+    });
+    
+    req.end();
+  });
+}
+
+function getDownloadUrl(release) {
+  const platform = os.platform();
+  const arch = os.arch();
+  
+  // Look for platform-specific assets
+  const assets = release.assets || [];
+  
+  if (platform === 'win32') {
+    const windowsAsset = assets.find(asset => 
+      asset.name.toLowerCase().includes('win') || 
+      asset.name.toLowerCase().includes('.exe')
+    );
+    if (windowsAsset) return windowsAsset.browser_download_url;
+  }
+  
+  if (platform === 'darwin') {
+    const macAsset = assets.find(asset => 
+      asset.name.toLowerCase().includes('mac') || 
+      asset.name.toLowerCase().includes('darwin') ||
+      asset.name.toLowerCase().includes('.dmg')
+    );
+    if (macAsset) return macAsset.browser_download_url;
+  }
+  
+  if (platform === 'linux') {
+    const linuxAsset = assets.find(asset => 
+      asset.name.toLowerCase().includes('linux') ||
+      asset.name.toLowerCase().includes('.appimage')
+    );
+    if (linuxAsset) return linuxAsset.browser_download_url;
+  }
+  
+  // Fallback to first asset or tarball
+  return assets.length > 0 ? assets[0].browser_download_url : release.tarball_url;
+}
+
+function compareVersions(version1, version2) {
+  const v1parts = version1.split('.').map(Number);
+  const v2parts = version2.split('.').map(Number);
+  
+  const maxLength = Math.max(v1parts.length, v2parts.length);
+  
+  for (let i = 0; i < maxLength; i++) {
+    const v1part = v1parts[i] || 0;
+    const v2part = v2parts[i] || 0;
+    
+    if (v1part > v2part) return 1;
+    if (v1part < v2part) return -1;
+  }
+  
+  return 0;
+}
+
+// Enhanced download function with retry mechanism and better progress tracking
+async function downloadFile(url, outputPath, onProgress, options = {}) {
+  const {
+    maxRetries = 3,
+    retryDelay = 2000,
+    timeout = 30000,
+    resumeSupport = true
+  } = options;
+
+  let attempt = 0;
+  let existingSize = 0;
+
+  // Check if partial file exists for resume
+  if (resumeSupport && fs.existsSync(outputPath)) {
+    try {
+      const stats = fs.statSync(outputPath);
+      existingSize = stats.size;
+      console.log(`📁 Resuming download from ${existingSize} bytes`);
+    } catch (error) {
+      console.warn('Could not get existing file size:', error.message);
+      existingSize = 0;
+    }
+  }
+
+  const attemptDownload = () => {
+    return new Promise((resolve, reject) => {
+      attempt++;
+      console.log(`🔄 Download attempt ${attempt}/${maxRetries + 1} for ${url}`);
+
+      const requestOptions = {
+        timeout: timeout,
+        headers: {}
+      };
+
+      // Add range header for resume support
+      if (existingSize > 0 && resumeSupport) {
+        requestOptions.headers['Range'] = `bytes=${existingSize}-`;
+      }
+
+      const file = fs.createWriteStream(outputPath, { flags: existingSize > 0 ? 'a' : 'w' });
+      let downloadStartTime = Date.now();
+      let lastProgressTime = Date.now();
+      let downloadedSize = existingSize;
+      let totalSize = existingSize;
+      let isResolved = false;
+
+      const request = https.get(url, requestOptions, (response) => {
+        // Handle redirects
+        if (response.statusCode === 302 || response.statusCode === 301) {
+          file.close();
+          return downloadFile(response.headers.location, outputPath, onProgress, options)
+            .then(resolve)
+            .catch(reject);
+        }
+
+        // Handle partial content (resume) or full content
+        if (response.statusCode !== 200 && response.statusCode !== 206) {
+          file.close();
+          reject(new Error(`Download failed with status ${response.statusCode}`));
+          return;
+        }
+
+        // Get total file size
+        if (response.statusCode === 206) {
+          // Partial content - parse content-range header
+          const contentRange = response.headers['content-range'];
+          if (contentRange) {
+            const match = contentRange.match(/bytes \d+-\d+\/(\d+)/);
+            if (match) {
+              totalSize = parseInt(match[1], 10);
+            }
+          }
+        } else {
+          // Full content
+          totalSize = parseInt(response.headers['content-length'], 10) || 0;
+          existingSize = 0; // Reset if we're downloading from scratch
+          downloadedSize = 0;
+        }
+
+        console.log(`📊 Total size: ${totalSize}, Starting from: ${existingSize}`);
+
+        response.on('data', (chunk) => {
+          downloadedSize += chunk.length;
+          const now = Date.now();
+          
+          // Throttle progress updates to avoid overwhelming the UI
+          if (now - lastProgressTime > 100) { // Update every 100ms
+            lastProgressTime = now;
+            
+            if (totalSize && onProgress) {
+              const progress = (downloadedSize / totalSize) * 100;
+              const speed = downloadedSize / ((now - downloadStartTime) / 1000); // bytes per second
+              const eta = totalSize > downloadedSize ? (totalSize - downloadedSize) / speed : 0;
+              
+              onProgress({
+                percent: Math.min(progress, 100),
+                downloadedBytes: downloadedSize,
+                totalBytes: totalSize,
+                speed: speed,
+                eta: eta,
+                attempt: attempt
+              });
+            }
+          }
+        });
+
+        response.pipe(file);
+
+        response.on('end', () => {
+          if (!isResolved) {
+            isResolved = true;
+            file.close(() => {
+              console.log(`✅ Download completed successfully`);
+              resolve(outputPath);
+            });
+          }
+        });
+
+        response.on('error', (error) => {
+          if (!isResolved) {
+            isResolved = true;
+            file.close();
+            console.error(`❌ Response error:`, error.message);
+            reject(error);
+          }
+        });
+      });
+
+      request.on('error', (error) => {
+        if (!isResolved) {
+          isResolved = true;
+          file.close();
+          console.error(`❌ Request error:`, error.message);
+          reject(error);
+        }
+      });
+
+      request.on('timeout', () => {
+        if (!isResolved) {
+          isResolved = true;
+          request.destroy();
+          file.close();
+          console.error(`⏰ Request timeout after ${timeout}ms`);
+          reject(new Error(`Download timeout after ${timeout}ms`));
+        }
+      });
+
+      file.on('error', (error) => {
+        if (!isResolved) {
+          isResolved = true;
+          console.error(`❌ File write error:`, error.message);
+          reject(error);
+        }
+      });
+    });
+  };
+
+  // Retry logic
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      return await attemptDownload();
+    } catch (error) {
+      console.error(`❌ Download attempt ${attempt} failed:`, error.message);
+      
+      if (i === maxRetries) {
+        // Final attempt failed, clean up and throw
+        try {
+          if (fs.existsSync(outputPath)) {
+            fs.unlinkSync(outputPath);
+            console.log(`🗑️ Cleaned up partial download file`);
+          }
+        } catch (cleanupError) {
+          console.warn('Could not clean up partial file:', cleanupError.message);
+        }
+        throw new Error(`Download failed after ${maxRetries + 1} attempts: ${error.message}`);
+      }
+      
+      // Wait before retry
+      console.log(`⏳ Waiting ${retryDelay}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      
+      // Exponential backoff
+      retryDelay *= 1.5;
+    }
+  }
+}
 
 async function downloadYtDlpDirectly(event) {
   return new Promise((resolve, reject) => {
@@ -1460,94 +2309,432 @@ function addToPath(binPath) {
 }
 
 function getYtDlpPath() {
-  const isWindows = process.platform === 'win32';
-  const executableName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-  const appDataPath = app.getPath('userData');
-  
-  const possiblePaths = [
-    // Python Scripts directories (highest priority)
-    ...(isWindows ? [
-      path.join(os.homedir(), 'AppData', 'Local', 'Packages', 'PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0', 'LocalCache', 'local-packages', 'Python313', 'Scripts', executableName),
-      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'Scripts', executableName),
-      path.join(os.homedir(), 'AppData', 'Roaming', 'Python', 'Python313', 'Scripts', executableName),
-      // Try other Python versions
-      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'Scripts', executableName),
-      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'Scripts', executableName),
-      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'Scripts', executableName)
-    ] : []),
-    
-    // User-specific paths
-    path.join(os.homedir(), 'AppData', 'Roaming', 'yt-dlp', executableName),
-    path.join(os.homedir(), 'AppData', 'Roaming', 'puyt-video-downloader', 'bin', executableName),
-    path.join(os.homedir(), 'AppData', 'Roaming', 'puyt-video-downloader', executableName),
-    
-    // Local project paths
-    path.join(__dirname, executableName),
-    path.join(__dirname, 'scripts', executableName),
-    
-    // Unix/Linux paths
-    path.join(os.homedir(), '.local', 'bin', executableName),
-    
-    // Windows specific paths
-    ...(isWindows ? [
-      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'yt-dlp', executableName),
-      path.join(process.env.PROGRAMFILES || '', 'yt-dlp', executableName),
-      path.join(process.env['PROGRAMFILES(X86)'] || '', 'yt-dlp', executableName),
-      path.join(os.homedir(), 'AppData', 'Local', 'Microsoft', 'WindowsApps', executableName)
-    ] : []),
-    
-    // Unix/Linux/macOS paths
-    ...(!isWindows ? [
-      '/usr/local/bin/yt-dlp',
-      '/usr/bin/yt-dlp',
-      '/opt/homebrew/bin/yt-dlp',
-      '/snap/bin/yt-dlp',
-      path.join(process.env.HOME || '', '.local', 'bin', 'yt-dlp')
-    ] : [])
-  ];
-
-  console.log('Checking yt-dlp paths:', possiblePaths);
-  
-  for (const ytDlpPath of possiblePaths) {
-    try {
-      if (fs.existsSync(ytDlpPath)) {
-        console.log('Found yt-dlp at:', ytDlpPath);
-        return ytDlpPath;
-      }
-    } catch (error) {
-      continue;
-    }
+  const ytdlpCheck = dependencyManager.checkYtDlp();
+  if (ytdlpCheck.available) {
+    console.log(`Found yt-dlp (${ytdlpCheck.source}):`, ytdlpCheck.path);
+    return ytdlpCheck.path;
   }
-
-  console.log('yt-dlp not found in specific paths, trying PATH');
-  
-  // Try to find in PATH
-  try {
-    const whereCommand = isWindows ? `where ${executableName}` : `which ${executableName}`;
-    const result = execSync(whereCommand, { encoding: 'utf8' });
-    const pathFromWhere = result.trim().split('\n')[0];
-    if (fs.existsSync(pathFromWhere)) {
-      console.log('Found yt-dlp in PATH:', pathFromWhere);
-      return pathFromWhere;
-    }
-  } catch (error) {
-    console.log('yt-dlp not found in PATH:', error.message);
-  }
-  
-  // Final fallback - try pip show to find installation location
-  try {
-    const pipResult = execSync('pip show yt-dlp', { encoding: 'utf8' });
-    const locationMatch = pipResult.match(/Location: (.+)/i);
-    if (locationMatch) {
-      const pipLocation = path.join(locationMatch[1], '..', 'Scripts', executableName);
-      if (fs.existsSync(pipLocation)) {
-        console.log('Found yt-dlp via pip location:', pipLocation);
-        return pipLocation;
-      }
-    }
-  } catch (error) {
-    console.log('Could not find yt-dlp via pip show');
-  }
-  
+  console.log('yt-dlp not found');
   return null;
 }
+
+// Automatic Update Checker Functions
+function startAutoUpdateChecker() {
+  if (!autoUpdateSettings.enabled) {
+    console.log('🔄 Automatic update checker is disabled');
+    return;
+  }
+
+  console.log(`🔄 Starting automatic update checker (interval: ${autoUpdateSettings.interval / 1000 / 60} minutes)`);
+  
+  // Clear existing interval if any
+  if (autoUpdateInterval) {
+    clearInterval(autoUpdateInterval);
+  }
+
+  // Perform initial check after 30 seconds
+  setTimeout(() => {
+    performAutoUpdateCheck();
+  }, 30000);
+
+  // Set up recurring checks
+  autoUpdateInterval = setInterval(() => {
+    performAutoUpdateCheck();
+  }, autoUpdateSettings.interval);
+}
+
+function stopAutoUpdateChecker() {
+  if (autoUpdateInterval) {
+    clearInterval(autoUpdateInterval);
+    autoUpdateInterval = null;
+    console.log('🛑 Automatic update checker stopped');
+  }
+}
+
+// System notification helper
+function showSystemNotification(title, body, type = 'info') {
+  if (!Notification.isSupported()) {
+    console.log('📢 System notifications not supported, using console log:', title, body);
+    return;
+  }
+
+  try {
+    const notification = new Notification({
+      title: title,
+      body: body,
+      icon: path.join(__dirname, '../build/icon.png'), // App icon
+      silent: false,
+      urgency: type === 'update-error' ? 'critical' : 'normal'
+    });
+
+    notification.on('click', () => {
+      // Focus the main window when notification is clicked
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+        
+        // If it's an update notification, navigate to settings
+        if (type.includes('update')) {
+          mainWindow.webContents.send('navigate-to-settings');
+        }
+      }
+    });
+
+    notification.show();
+    console.log('📢 System notification shown:', title);
+  } catch (error) {
+    console.error('❌ Failed to show system notification:', error.message);
+  }
+}
+
+// Silent update download handler
+async function downloadUpdateSilently(updateInfo) {
+  if (isDownloadingUpdate) {
+    console.log('⏳ Update download already in progress, skipping silent download');
+    return;
+  }
+
+  try {
+    isDownloadingUpdate = true;
+    console.log(`🔄 Starting silent download for version ${updateInfo.version}`);
+    
+    const downloadPath = path.join(os.tmpdir(), `puyt-update-${updateInfo.version}.exe`);
+    
+    // Download with progress tracking but no UI updates for silent mode
+    await downloadFile(updateInfo.downloadUrl, downloadPath, (progress) => {
+      // Log progress for silent downloads but don't send to UI
+      if (progress.percent % 25 === 0) { // Log every 25%
+        console.log(`📥 Silent download progress: ${Math.round(progress.percent)}% (${formatBytes(progress.downloadedBytes)}/${formatBytes(progress.totalBytes)})`);
+      }
+    }, {
+      maxRetries: 3,
+      retryDelay: 5000,
+      timeout: 300000, // 5 minutes
+      resumeSupport: true
+    });
+
+    console.log(`✅ Silent download completed: ${downloadPath}`);
+    
+    // Show notification that download is complete and ready to install
+    showSystemNotification(
+      'Update Downloaded',
+      `Puyt ${updateInfo.version} has been downloaded and is ready to install. Click to install now or it will be installed on next restart.`,
+      'update-downloaded'
+    );
+    
+    // Store the downloaded update info for later installation
+    updateInfo.downloadPath = downloadPath;
+    updateInfo.downloadedAt = new Date().toISOString();
+    
+    // Notify the UI if window is available (non-intrusive)
+    if (mainWindow) {
+      mainWindow.webContents.send('auto-update-notification', {
+        title: 'Update Ready',
+        message: `Puyt ${updateInfo.version} is ready to install`,
+        version: updateInfo.version,
+        type: 'update-downloaded',
+        silent: true
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Silent update download failed:', error.message);
+    throw error;
+  } finally {
+    isDownloadingUpdate = false;
+  }
+}
+
+// Helper function for formatting bytes in silent downloads
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Security: Verify update file integrity
+function verifyUpdateSignature(filePath, expectedHash, algorithm = 'sha256') {
+  return new Promise((resolve, reject) => {
+    try {
+      const hash = crypto.createHash(algorithm);
+      const stream = fs.createReadStream(filePath);
+      
+      stream.on('data', (data) => {
+        hash.update(data);
+      });
+      
+      stream.on('end', () => {
+        const fileHash = hash.digest('hex');
+        const isValid = fileHash === expectedHash;
+        console.log(`🔐 Update verification: ${isValid ? 'PASSED' : 'FAILED'}`);
+        console.log(`Expected: ${expectedHash}`);
+        console.log(`Actual: ${fileHash}`);
+        resolve(isValid);
+      });
+      
+      stream.on('error', (error) => {
+        console.error('❌ Error verifying update signature:', error);
+        reject(error);
+      });
+    } catch (error) {
+      console.error('❌ Error creating hash verification:', error);
+      reject(error);
+    }
+  });
+}
+
+// Rollback mechanism for failed updates
+function createUpdateBackup() {
+  return new Promise((resolve, reject) => {
+    try {
+      const appPath = app.getAppPath();
+      const backupDir = path.join(os.tmpdir(), 'puyt-backup', Date.now().toString());
+      
+      // Create backup directory
+      fs.mkdirSync(backupDir, { recursive: true });
+      
+      // Copy current app files to backup
+      const copyRecursive = (src, dest) => {
+        const stats = fs.statSync(src);
+        if (stats.isDirectory()) {
+          fs.mkdirSync(dest, { recursive: true });
+          const files = fs.readdirSync(src);
+          files.forEach(file => {
+            copyRecursive(path.join(src, file), path.join(dest, file));
+          });
+        } else {
+          fs.copyFileSync(src, dest);
+        }
+      };
+      
+      copyRecursive(appPath, backupDir);
+      console.log(`📦 Update backup created: ${backupDir}`);
+      resolve(backupDir);
+    } catch (error) {
+      console.error('❌ Failed to create update backup:', error);
+      reject(error);
+    }
+  });
+}
+
+function rollbackUpdate(backupPath) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (!fs.existsSync(backupPath)) {
+        throw new Error('Backup path does not exist');
+      }
+      
+      const appPath = app.getAppPath();
+      
+      // Remove current app files
+      const removeRecursive = (dirPath) => {
+        if (fs.existsSync(dirPath)) {
+          const files = fs.readdirSync(dirPath);
+          files.forEach(file => {
+            const filePath = path.join(dirPath, file);
+            const stats = fs.statSync(filePath);
+            if (stats.isDirectory()) {
+              removeRecursive(filePath);
+            } else {
+              fs.unlinkSync(filePath);
+            }
+          });
+          fs.rmdirSync(dirPath);
+        }
+      };
+      
+      // Restore from backup
+      const copyRecursive = (src, dest) => {
+        const stats = fs.statSync(src);
+        if (stats.isDirectory()) {
+          fs.mkdirSync(dest, { recursive: true });
+          const files = fs.readdirSync(src);
+          files.forEach(file => {
+            copyRecursive(path.join(src, file), path.join(dest, file));
+          });
+        } else {
+          fs.copyFileSync(src, dest);
+        }
+      };
+      
+      copyRecursive(backupPath, appPath);
+      
+      // Clean up backup
+      removeRecursive(backupPath);
+      
+      console.log('🔄 Update rollback completed successfully');
+      resolve(true);
+    } catch (error) {
+      console.error('❌ Failed to rollback update:', error);
+      reject(error);
+    }
+  });
+}
+
+async function performAutoUpdateCheck() {
+  if (isCheckingForUpdates) {
+    console.log('⏳ Update check already in progress, skipping automatic check');
+    return;
+  }
+
+  try {
+    console.log(`🔍 Performing automatic update check (channel: ${autoUpdateSettings.channel})`);
+    
+    const currentVersion = app.getVersion();
+    const releases = await fetchGitHubReleases(autoUpdateSettings.channel);
+    
+    if (releases.length === 0) {
+      console.log('📭 No releases found during automatic check');
+      return;
+    }
+
+    const latestRelease = releases[0];
+    const latestVersion = latestRelease.tag_name.replace(/^v/, '');
+    
+    if (compareVersions(latestVersion, currentVersion) > 0) {
+      updateInfo = {
+        version: latestVersion,
+        downloadUrl: getDownloadUrl(latestRelease),
+        releaseNotes: latestRelease.body || 'No release notes available',
+        publishedAt: latestRelease.published_at,
+        channel: autoUpdateSettings.channel,
+        isAutomatic: true
+      };
+      
+      console.log(`🎉 New version available: ${latestVersion} (current: ${currentVersion})`);      
+      
+      // Handle silent vs non-silent updates
+      if (autoUpdateSettings.silent) {
+        // For silent updates, show system notification
+        if (autoUpdateSettings.autoDownload) {
+          showSystemNotification(
+            'Update Available',
+            `Puyt ${latestVersion} is available. Downloading in background...`,
+            'update-available'
+          );
+          
+          // Start automatic download for silent updates
+          try {
+            await downloadUpdateSilently(updateInfo);
+          } catch (error) {
+            console.error('❌ Silent update download failed:', error.message);
+            showSystemNotification(
+              'Update Download Failed',
+              `Failed to download Puyt ${latestVersion}. You can update manually from settings.`,
+              'update-error'
+            );
+          }
+        } else {
+          // Just notify about available update without auto-downloading
+          showSystemNotification(
+            'Update Available',
+            `Puyt ${latestVersion} is now available! Click to open settings and update.`,
+            'update-available'
+          );
+        }
+      } else {
+        // For non-silent updates, notify the UI
+        if (mainWindow) {
+          mainWindow.webContents.send('update-available', updateInfo);
+          mainWindow.webContents.send('auto-update-notification', {
+            title: 'Update Available',
+            message: `Puyt ${latestVersion} is now available!`,
+            version: latestVersion,
+            type: 'update-available'
+          });
+        }
+      }
+    } else {
+      console.log('✅ Application is up to date (automatic check)');
+    }
+  } catch (error) {
+    console.error('❌ Error during automatic update check:', error.message);
+    // Don't show error notifications for automatic checks to avoid spam
+  }
+}
+
+
+
+// IPC handlers for automatic update settings
+ipcMain.handle('get-auto-update-settings', () => {
+  return autoUpdateSettings;
+});
+
+ipcMain.handle('set-auto-update-settings', (event, settings) => {
+  const oldEnabled = autoUpdateSettings.enabled;
+  const oldInterval = autoUpdateSettings.interval;
+  
+  autoUpdateSettings = { ...autoUpdateSettings, ...settings };
+  
+  // Restart checker if settings changed
+  if (autoUpdateSettings.enabled !== oldEnabled || autoUpdateSettings.interval !== oldInterval) {
+    stopAutoUpdateChecker();
+    if (autoUpdateSettings.enabled) {
+      startAutoUpdateChecker();
+    }
+  }
+  
+  console.log('⚙️ Auto-update settings updated:', autoUpdateSettings);
+  return autoUpdateSettings;
+});
+
+ipcMain.handle('trigger-manual-update-check', async (event, channel) => {
+  // This is for manual checks triggered by user, not silent
+  const originalSilent = autoUpdateSettings.silent;
+  autoUpdateSettings.silent = false;
+  
+  try {
+    // Call the check-for-updates handler directly
+    const checkForUpdatesHandler = ipcMain.listeners('check-for-updates')[0];
+    if (checkForUpdatesHandler) {
+      return await checkForUpdatesHandler(event, channel || autoUpdateSettings.channel);
+    } else {
+      // Fallback: call the handler function directly
+      if (isCheckingForUpdates) {
+        throw new Error('Update check already in progress');
+      }
+
+      isCheckingForUpdates = true;
+      updateInfo = null;
+
+      try {
+        const currentVersion = app.getVersion();
+        const releases = await fetchGitHubReleases(channel || autoUpdateSettings.channel);
+        
+        if (releases.length === 0) {
+          mainWindow.webContents.send('update-not-available');
+          return { available: false, message: 'No releases found' };
+        }
+
+        const latestRelease = releases[0];
+        const latestVersion = latestRelease.tag_name.replace(/^v/, '');
+        
+        if (compareVersions(latestVersion, currentVersion) > 0) {
+          updateInfo = {
+            version: latestVersion,
+            downloadUrl: getDownloadUrl(latestRelease),
+            releaseNotes: latestRelease.body || 'No release notes available',
+            publishedAt: latestRelease.published_at,
+            channel: channel || autoUpdateSettings.channel
+          };
+          
+          mainWindow.webContents.send('update-available', updateInfo);
+          return { available: true, updateInfo };
+        } else {
+          mainWindow.webContents.send('update-not-available');
+          return { available: false, message: 'You are running the latest version' };
+        }
+      } catch (error) {
+        console.error('Error checking for updates:', error);
+        mainWindow.webContents.send('update-error', { message: error.message });
+        throw error;
+      } finally {
+        isCheckingForUpdates = false;
+      }
+    }
+  } finally {
+    autoUpdateSettings.silent = originalSilent;
+  }
+});
