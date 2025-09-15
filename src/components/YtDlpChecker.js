@@ -22,6 +22,7 @@ const YtDlpChecker = ({ onInstalled }) => {
         }
       } catch (error) {
         console.error('Error checking yt-dlp on mount:', error);
+        setInstallMessage(`Failed to check yt-dlp availability: ${error.message || 'Connection error'}`);
       } finally {
         setIsChecking(false);
         setHasCheckedOnMount(true);
@@ -43,6 +44,7 @@ const YtDlpChecker = ({ onInstalled }) => {
       }
     } catch (error) {
       console.error('Error checking yt-dlp:', error);
+      setInstallMessage(`Failed to verify yt-dlp installation: ${error.message || 'System error'}`);
     } finally {
       setIsChecking(false);
     }
@@ -69,7 +71,7 @@ const YtDlpChecker = ({ onInstalled }) => {
       }
     } catch (error) {
       console.error('Error installing yt-dlp:', error);
-      setInstallMessage('Installation failed. Please try installing manually.');
+      setInstallMessage(`Installation failed: ${error.message || 'Unknown installation error'}. Please try installing manually or check your internet connection.`);
     } finally {
       setIsInstalling(false);
     }

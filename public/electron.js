@@ -55,7 +55,10 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(createWindow).catch((error) => {
+  console.error('Failed to create window:', error);
+  app.quit();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -89,11 +92,16 @@ ipcMain.handle('get-video-info', async (event, url) => {
       return;
     }
 
-    const process = spawn(ytDlpPath, [
+    // Check if URL is a playlist
+    const isPlaylist = url.includes('playlist?list=') || url.includes('&list=');
+    
+    const args = [
       '--dump-json',
-      '--no-playlist',
+      isPlaylist ? '--yes-playlist' : '--no-playlist',
       url
-    ]);
+    ];
+    
+    const process = spawn(ytDlpPath, args);
 
     let stdout = '';
     let stderr = '';
@@ -109,22 +117,65 @@ ipcMain.handle('get-video-info', async (event, url) => {
     process.on('close', (code) => {
       if (code === 0) {
         try {
-          const videoInfo = JSON.parse(stdout);
-          resolve({
-            title: videoInfo.title,
-            duration: videoInfo.duration,
-            thumbnail: videoInfo.thumbnail,
-            uploader: videoInfo.uploader,
-            formats: (() => {
+          // Handle both single video and playlist responses
+          const lines = stdout.trim().split('\n').filter(line => line.trim());
+          
+          if (lines.length === 0) {
+            reject(new Error('No video information found'));
+            return;
+          }
+          
+          // Parse each line as JSON (for playlists, each video is a separate JSON object)
+          const videos = [];
+          for (const line of lines) {
+            try {
+              const videoInfo = JSON.parse(line);
+              videos.push(videoInfo);
+            } catch (parseError) {
+              console.warn('Failed to parse video info line:', parseError);
+            }
+          }
+          
+          if (videos.length === 0) {
+            reject(new Error('Failed to parse video information'));
+            return;
+          }
+          
+          // If it's a single video, return single video format
+          if (videos.length === 1 && !isPlaylist) {
+            const videoInfo = videos[0];
+            resolve({
+              title: videoInfo.title,
+              duration: videoInfo.duration,
+              thumbnail: videoInfo.thumbnail,
+              uploader: videoInfo.uploader,
+              url: videoInfo.webpage_url || url,
+              isPlaylist: false,
+              formats: (() => {
               if (!videoInfo.formats) return [];
               
               // Remove duplicates and filter valid formats
               const uniqueFormats = new Map();
               
               videoInfo.formats.forEach(format => {
-                // Skip formats without proper codec info
+                // Skip invalid formats - must have proper codec info and not be thumbnails/banners
                 if (!format.format_id || (!format.vcodec && !format.acodec)) return;
                 
+                // Skip thumbnail and banner formats
+                if (format.format_note && (
+                  format.format_note.toLowerCase().includes('thumbnail') ||
+                  format.format_note.toLowerCase().includes('banner') ||
+                  format.format_note.toLowerCase().includes('storyboard') ||
+                  format.format_note.toLowerCase().includes('preview')
+                )) return;
+                
+                // Skip formats without proper video dimensions for video content
+                const hasVideo = format.vcodec && format.vcodec !== 'none';
+                const hasAudio = format.acodec && format.acodec !== 'none';
+                
+                if (hasVideo && (!format.height || format.height < 144)) return; // Skip very low quality or invalid video
+                
+                // Create unique key for deduplication
                 const key = `${format.format_id}_${format.ext}_${format.height || 'audio'}_${format.vcodec || 'none'}_${format.acodec || 'none'}`;
                 
                 // Only keep if not duplicate or if this one has better quality info
@@ -141,9 +192,12 @@ ipcMain.handle('get-video-info', async (event, url) => {
                     fps: format.fps,
                     vcodec: format.vcodec === 'none' ? null : format.vcodec,
                     acodec: format.acodec === 'none' ? null : format.acodec,
+                    abr: format.abr, // Audio bitrate
+                    vbr: format.vbr, // Video bitrate
+                    tbr: format.tbr, // Total bitrate
                     // Add format type for better categorization
-                    type: format.vcodec && format.acodec && format.vcodec !== 'none' && format.acodec !== 'none' ? 'video+audio' :
-                          format.vcodec && format.vcodec !== 'none' ? 'video' : 'audio'
+                    type: hasVideo && hasAudio ? 'combined' :
+                          hasVideo ? 'video' : 'audio'
                   });
                 }
               });
@@ -151,6 +205,32 @@ ipcMain.handle('get-video-info', async (event, url) => {
               return Array.from(uniqueFormats.values());
             })()
           });
+          } else {
+            // Handle playlist - return playlist information with video list
+            const playlistVideos = videos.map(video => ({
+              id: video.id,
+              title: video.title,
+              duration: video.duration,
+              thumbnail: video.thumbnail,
+              uploader: video.uploader,
+              url: video.webpage_url,
+              playlist_index: video.playlist_index
+            }));
+            
+            // Get playlist metadata from first video
+            const firstVideo = videos[0];
+            resolve({
+              title: firstVideo.playlist_title || `Playlist (${videos.length} videos)`,
+              duration: videos.reduce((total, video) => total + (video.duration || 0), 0),
+              thumbnail: firstVideo.thumbnail,
+              uploader: firstVideo.uploader,
+              url: url,
+              isPlaylist: true,
+              videoCount: videos.length,
+              videos: playlistVideos,
+              formats: [] // Playlists don't have formats, individual videos do
+            });
+          }
         } catch (error) {
           reject(new Error('Failed to parse video information'));
         }
@@ -159,6 +239,88 @@ ipcMain.handle('get-video-info', async (event, url) => {
       }
     });
   });
+});
+
+// Batch download handler for playlists and multiple videos
+ipcMain.handle('download-batch', async (event, options) => {
+  const { videos, outputPath, downloadOptions } = options;
+  
+  if (!videos || !Array.isArray(videos) || videos.length === 0) {
+    throw new Error('No videos provided for batch download');
+  }
+  
+  const results = [];
+  let completedCount = 0;
+  
+  // Send initial progress
+  event.sender.send('batch-download-progress', {
+    total: videos.length,
+    completed: 0,
+    current: null,
+    status: 'starting'
+  });
+  
+  for (let i = 0; i < videos.length; i++) {
+    const video = videos[i];
+    
+    try {
+      // Send progress update
+      event.sender.send('batch-download-progress', {
+        total: videos.length,
+        completed: completedCount,
+        current: {
+          index: i + 1,
+          title: video.title,
+          url: video.url
+        },
+        status: 'downloading'
+      });
+      
+      // Download individual video
+      const videoOptions = {
+        ...downloadOptions,
+        url: video.url,
+        outputPath: outputPath,
+        title: video.title
+      };
+      
+      // Use existing download logic
+      await new Promise((resolve, reject) => {
+        downloadWithFfmpeg(video.url, outputPath, videoOptions)
+          .then(resolve)
+          .catch(reject);
+      });
+      
+      completedCount++;
+      results.push({ success: true, video: video.title });
+      
+    } catch (error) {
+      results.push({ success: false, video: video.title, error: error.message });
+      
+      // Send error for this video but continue with others
+      event.sender.send('batch-download-error', {
+        video: video.title,
+        error: error.message,
+        index: i + 1
+      });
+    }
+  }
+  
+  // Send final progress
+  event.sender.send('batch-download-progress', {
+    total: videos.length,
+    completed: completedCount,
+    current: null,
+    status: 'completed'
+  });
+  
+  return {
+    success: true,
+    results: results,
+    totalVideos: videos.length,
+    successCount: results.filter(r => r.success).length,
+    errorCount: results.filter(r => !r.success).length
+  };
 });
 
 // FFmpeg fallback function
@@ -343,8 +505,31 @@ function downloadWithFfmpegDirect(url, outputPath, options, resolve, reject) {
       args.push(outputFile);
       
       const downloadProcess = spawn('ffmpeg', args);
-      
+      let processCompleted = false;
       let totalDuration = null;
+      
+      // Set up timeout for long-running processes (30 minutes max)
+      const processTimeout = setTimeout(() => {
+        if (!processCompleted) {
+          console.log('FFmpeg process timed out, terminating...');
+          try {
+            downloadProcess.kill('SIGTERM');
+            setTimeout(() => {
+              if (!processCompleted) {
+                downloadProcess.kill('SIGKILL');
+              }
+            }, 5000);
+          } catch (error) {
+            console.log('Error terminating FFmpeg process:', error.message);
+          }
+          reject(new Error('FFmpeg process timed out after 30 minutes'));
+        }
+      }, 30 * 60 * 1000); // 30 minutes
+      
+      const cleanup = () => {
+        processCompleted = true;
+        clearTimeout(processTimeout);
+      };
       
       downloadProcess.stderr.on('data', (data) => {
         const output = data.toString();
@@ -392,6 +577,7 @@ function downloadWithFfmpegDirect(url, outputPath, options, resolve, reject) {
         
         // Check for FFmpeg errors
         if (output.includes('Invalid data found') || output.includes('Connection refused') || output.includes('Server returned 4')) {
+          cleanup();
           mainWindow.webContents.send('download-error', { 
             error: 'FFmpeg failed to process the video stream. The URL may be invalid or expired.' 
           });
@@ -399,6 +585,7 @@ function downloadWithFfmpegDirect(url, outputPath, options, resolve, reject) {
       });
       
       downloadProcess.on('close', (code) => {
+        cleanup();
         if (code === 0) {
           resolve({ success: true, message: 'Download completed with FFmpeg' });
         } else {
@@ -407,6 +594,7 @@ function downloadWithFfmpegDirect(url, outputPath, options, resolve, reject) {
       });
       
       downloadProcess.on('error', (error) => {
+        cleanup();
         reject(new Error(`FFmpeg process error: ${error.message}`));
       });
 }
@@ -418,6 +606,22 @@ ipcMain.handle('download-video', async (event, options) => {
     const ytDlpAvailable = await new Promise((checkResolve) => {
       const testProcess = spawn(ytDlpPath, ['--version']);
       let hasOutput = false;
+      let resolved = false;
+      
+      const cleanup = (result) => {
+        if (resolved) return;
+        resolved = true;
+        
+        try {
+          if (!testProcess.killed) {
+            testProcess.kill('SIGTERM');
+          }
+        } catch (error) {
+          // Process might already be dead
+        }
+        
+        checkResolve(result);
+      };
       
       testProcess.stdout.on('data', (data) => {
         if (data.toString().trim()) {
@@ -426,16 +630,16 @@ ipcMain.handle('download-video', async (event, options) => {
       });
       
       testProcess.on('close', (code) => {
-        checkResolve(code === 0 && hasOutput);
+        cleanup(code === 0 && hasOutput);
       });
       
       testProcess.on('error', () => {
-        checkResolve(false);
+        cleanup(false);
       });
       
+      // Timeout with proper cleanup
       setTimeout(() => {
-        testProcess.kill();
-        checkResolve(false);
+        cleanup(false);
       }, 3000);
     });
     
@@ -464,7 +668,9 @@ ipcMain.handle('download-video', async (event, options) => {
       startTime = null,
       endTime = null,
       customArgs = '',
-      videoTitle = null
+      videoTitle = null,
+      preferHEVC = false,
+      videoCodec = 'auto'
     } = options;
 
     // Create organized folder structure if downloading extras (subtitles or thumbnails)
@@ -496,41 +702,71 @@ ipcMain.handle('download-video', async (event, options) => {
       }
     }
 
+    // Build codec preference string
+    let codecPreference = '';
+    if (videoCodec === 'h264') {
+      codecPreference = '[vcodec^=avc1]/[vcodec^=h264]';
+    } else if (videoCodec === 'h265' || preferHEVC) {
+      codecPreference = '[vcodec^=hev1]/[vcodec^=hvc1]/[vcodec^=h265]/[vcodec^=hevc]';
+    } else if (videoCodec === 'vp9') {
+      codecPreference = '[vcodec^=vp9]';
+    } else if (videoCodec === 'av1') {
+      codecPreference = '[vcodec^=av01]';
+    }
+
     // Build format selector based on quality and format preferences
     let formatSelector;
     if (extractAudio) {
-      formatSelector = 'bestaudio[acodec!=opus]/bestaudio';
+      // Audio extraction - prioritize high quality audio formats
+      formatSelector = 'bestaudio[acodec!=opus]/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio';
     } else if (quality === 'best') {
       if (integratedAudio) {
-        // Prioritize original quality with best codec compatibility
-        formatSelector = `best[ext=${format}][vcodec!*=av01]/bestvideo[ext=${format}][vcodec!*=av01]+bestaudio[acodec!=opus]/bestvideo+bestaudio/best`;
+        // Best quality with integrated audio - avoid banners and thumbnails
+        if (codecPreference) {
+          formatSelector = `bestvideo[height>=240][vcodec!=none]${codecPreference}+bestaudio[acodec!=none]/bestvideo[height>=240][vcodec!=none]+bestaudio[acodec!=none]/best[height>=240][vcodec!=none][acodec!=none]`;
+        } else {
+          formatSelector = `bestvideo[height>=240][vcodec!=none]+bestaudio[acodec!=none]/best[height>=240][vcodec!=none][acodec!=none]`;
+        }
       } else {
-        formatSelector = `bestvideo[ext=${format}][vcodec!*=av01]/bestvideo[vcodec!*=av01]/best[ext=${format}]/best`;
+        // Best video only - ensure it's actual video content
+        if (codecPreference) {
+          formatSelector = `bestvideo[height>=240][vcodec!=none]${codecPreference}/bestvideo[height>=240][vcodec!=none]`;
+        } else {
+          formatSelector = `bestvideo[height>=240][vcodec!=none]`;
+        }
       }
     } else if (quality === 'worst') {
       if (integratedAudio) {
-        formatSelector = `worst[ext=${format}]/worst`;
-      } else {
-        formatSelector = `worstvideo[ext=${format}]/worst[ext=${format}]/worst`;
-      }
-    } else {
-      // Quality like '720p', '1080p', '1440p', '2160p', '4320p', '8320p'
-      const height = quality.replace('p', '');
-      if (integratedAudio) {
-        // Enhanced format selection for high quality videos including 4K/8K
-        if (parseInt(height) >= 2160) {
-          // For 4K+ videos, prioritize best codecs and avoid problematic formats
-          formatSelector = `best[height<=${height}][vcodec*=264]/best[height<=${height}][vcodec*=265]/bestvideo[height<=${height}][vcodec*=264]+bestaudio[acodec!=opus]/bestvideo[height<=${height}][vcodec*=265]+bestaudio[acodec!=opus]/bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+        if (codecPreference) {
+          formatSelector = `worstvideo[height>=240][vcodec!=none]${codecPreference}+bestaudio[acodec!=none]/worstvideo[height>=240][vcodec!=none]+bestaudio[acodec!=none]/worst[height>=240][vcodec!=none][acodec!=none]`;
         } else {
-          // Standard quality selection with original framerate preservation
-          formatSelector = `best[height<=${height}][ext=${format}][vcodec!*=av01]/bestvideo[height<=${height}][ext=${format}][vcodec!*=av01]+bestaudio[acodec!=opus]/bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+          formatSelector = `worstvideo[height>=240][vcodec!=none]+bestaudio[acodec!=none]/worst[height>=240][vcodec!=none][acodec!=none]`;
         }
       } else {
-        // Video only with enhanced codec selection for high quality
-        if (parseInt(height) >= 2160) {
-          formatSelector = `bestvideo[height<=${height}][vcodec*=264]/bestvideo[height<=${height}][vcodec*=265]/bestvideo[height<=${height}][vcodec!*=av01]/best[height<=${height}]/best`;
+        if (codecPreference) {
+          formatSelector = `worstvideo[height>=240][vcodec!=none]${codecPreference}/worstvideo[height>=240][vcodec!=none]`;
         } else {
-          formatSelector = `bestvideo[height<=${height}][ext=${format}][vcodec!*=av01]/bestvideo[height<=${height}][vcodec!*=av01]/best[height<=${height}]/best`;
+          formatSelector = `worstvideo[height>=240][vcodec!=none]`;
+        }
+      }
+    } else {
+      // Specific quality like '720p', '1080p', etc.
+      const height = quality.replace('p', '');
+      const minHeight = Math.max(240, parseInt(height) * 0.8); // Allow some tolerance but ensure minimum quality
+      
+      if (integratedAudio) {
+        // Prioritize exact height match, then close matches, ensure real video content
+        if (codecPreference) {
+          formatSelector = `bestvideo[height=${height}][vcodec!=none]${codecPreference}+bestaudio[acodec!=none]/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]${codecPreference}+bestaudio[acodec!=none]/bestvideo[height=${height}][vcodec!=none]+bestaudio[acodec!=none]/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]+bestaudio[acodec!=none]/best[height=${height}][vcodec!=none][acodec!=none]/best[height<=${height}][height>=${minHeight}][vcodec!=none][acodec!=none]`;
+        } else {
+          formatSelector = `bestvideo[height=${height}][vcodec!=none]+bestaudio[acodec!=none]/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]+bestaudio[acodec!=none]/best[height=${height}][vcodec!=none][acodec!=none]/best[height<=${height}][height>=${minHeight}][vcodec!=none][acodec!=none]`;
+        }
+      } else {
+        // Video only with specific quality
+        if (codecPreference) {
+          formatSelector = `bestvideo[height=${height}][vcodec!=none]${codecPreference}/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]${codecPreference}/bestvideo[height=${height}][vcodec!=none]/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]`;
+        } else {
+          formatSelector = `bestvideo[height=${height}][vcodec!=none]/bestvideo[height<=${height}][height>=${minHeight}][vcodec!=none]`;
         }
       }
     }
@@ -543,20 +779,24 @@ ipcMain.handle('download-video', async (event, options) => {
       '--embed-metadata',
       '--write-info-json',
       '--no-playlist',
-      '--restrict-filenames'
+      '--restrict-filenames',
+      '--no-check-certificates', // Handle SSL issues
+      '--ignore-errors', // Continue on non-fatal errors
+      '--no-warnings' // Reduce noise in output
     ];
 
     // Add quality preservation arguments
     if (!extractAudio) {
       args.push('--merge-output-format', format);
-      // Preserve original framerate and quality
-      args.push('--postprocessor-args', 'ffmpeg:-avoid_negative_ts make_zero -fflags +genpts');
+      // Preserve original framerate and quality, avoid negative timestamps
+      args.push('--postprocessor-args', 'ffmpeg:-avoid_negative_ts make_zero -fflags +genpts -movflags +faststart');
     }
 
     // Add audio extraction options
     if (extractAudio) {
       args.push('--extract-audio');
       args.push('--audio-format', audioFormat);
+      args.push('--audio-quality', '0'); // Best audio quality
     }
 
     // Add subtitle options
@@ -766,8 +1006,14 @@ ipcMain.handle('download-video', async (event, options) => {
         error.includes('format not available')
       )) {
         console.log('Critical yt-dlp error detected, will fallback to ffmpeg');
-        // Kill the current process and trigger fallback
-        process.kill();
+        // Properly terminate the current process and trigger fallback
+        try {
+          if (!process.killed) {
+            process.kill('SIGTERM');
+          }
+        } catch (killError) {
+          console.log('Process already terminated');
+        }
         return;
       }
       
@@ -931,6 +1177,22 @@ ipcMain.handle('check-ytdlp', async () => {
     const process = spawn('yt-dlp', ['--version'], { shell: true });
     
     let hasOutput = false;
+    let resolved = false;
+    
+    const cleanup = (result) => {
+      if (resolved) return;
+      resolved = true;
+      
+      try {
+        if (!process.killed) {
+          process.kill('SIGTERM');
+        }
+      } catch (error) {
+        // Process might already be dead
+      }
+      
+      resolve(result);
+    };
     
     process.stdout.on('data', (data) => {
       if (data.toString().trim()) {
@@ -939,17 +1201,16 @@ ipcMain.handle('check-ytdlp', async () => {
     });
     
     process.on('close', (code) => {
-      resolve(code === 0 && hasOutput);
+      cleanup(code === 0 && hasOutput);
     });
     
     process.on('error', () => {
-      resolve(false);
+      cleanup(false);
     });
     
-    // Timeout after 5 seconds
+    // Timeout after 5 seconds with proper cleanup
     setTimeout(() => {
-      process.kill();
-      resolve(false);
+      cleanup(false);
     }, 5000);
   });
 });
@@ -987,7 +1248,7 @@ ipcMain.handle('validate-path', async (event, pathToValidate) => {
     return fs.existsSync(pathToValidate) && fs.statSync(pathToValidate).isDirectory();
   } catch (error) {
     console.error('Error validating path:', error);
-    return false;
+    return { success: false, error: `Failed to validate path "${pathToValidate}": ${error.message || 'File system error'}` };
   }
 });
 
@@ -1007,7 +1268,7 @@ ipcMain.handle('get-settings', async () => {
     };
   } catch (error) {
     console.error('Error loading settings:', error);
-    return null;
+    return { error: `Failed to load settings: ${error.message || 'File read error'}` };
   }
 });
 
@@ -1018,7 +1279,7 @@ ipcMain.handle('save-settings', async (event, settings) => {
     return true;
   } catch (error) {
     console.error('Error saving settings:', error);
-    return false;
+    return { success: false, error: `Failed to save settings: ${error.message || 'File write error'}` };
   }
 });
 
@@ -1035,7 +1296,7 @@ ipcMain.handle('select-download-path', async () => {
     return null;
   } catch (error) {
     console.error('Error selecting download path:', error);
-    return null;
+    return { error: `Failed to open folder dialog: ${error.message || 'Dialog system error'}` };
   }
 });
 
@@ -1121,7 +1382,10 @@ async function downloadYtDlpDirectly(event) {
               message: 'yt-dlp downloaded and installed successfully!' 
             });
           });
-        }).on('error', reject);
+        }).on('error', (error) => {
+          file.destroy(); // Clean up the file stream
+          reject(error);
+        });
       } else {
         const totalSize = parseInt(response.headers['content-length'], 10);
         let downloadedSize = 0;
@@ -1132,6 +1396,12 @@ async function downloadYtDlpDirectly(event) {
             const progress = Math.round((downloadedSize / totalSize) * 100);
             event.sender.send('ytdlp-install-progress', `Download progress: ${progress}%`);
           }
+        });
+        
+        response.on('error', (error) => {
+          file.destroy(); // Clean up the file stream
+          fs.unlink(filePath, () => {}); // Delete partial file
+          reject(error);
         });
         
         response.pipe(file);
@@ -1158,8 +1428,17 @@ async function downloadYtDlpDirectly(event) {
             message: 'yt-dlp downloaded and installed successfully!' 
           });
         });
+        
+        file.on('error', (error) => {
+          file.destroy(); // Clean up the file stream
+          fs.unlink(filePath, () => {}); // Delete partial file
+          reject(error);
+        });
       }
-    }).on('error', reject);
+    }).on('error', (error) => {
+      file.destroy(); // Clean up the file stream
+      reject(error);
+    });
   });
 }
 

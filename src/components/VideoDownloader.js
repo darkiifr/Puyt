@@ -181,6 +181,8 @@ const VideoDownloader = () => {
           integratedAudio: dynamicParameters.integratedAudio !== false,
           downloadSubtitles: dynamicParameters.downloadSubtitles || false,
           embedThumbnail: dynamicParameters.embedThumbnail || false,
+          preferHEVC: dynamicParameters.preferHEVC || false,
+          videoCodec: dynamicParameters.videoCodec || 'auto',
           startTime: dynamicParameters.startTime || null,
           endTime: dynamicParameters.endTime || null,
           customArgs: dynamicParameters.customArgs || '',
@@ -201,9 +203,11 @@ const VideoDownloader = () => {
         // Download completion is now handled by the event listener
       }
     } catch (err) {
-      setError(err.message || 'Download failed');
+      const errorMessage = err.message || 'Download failed due to unknown error';
+      const detailedError = `Download failed for "${videoInfo?.title || 'video'}": ${errorMessage}`;
+      setError(detailedError);
       setConsoleProgress({
-        message: `Download failed: ${err.message || 'Unknown error'}`,
+        message: `❌ ${detailedError}${err.code ? ` (Error Code: ${err.code})` : ''}`,
         type: 'error'
       });
     } finally {
@@ -213,22 +217,27 @@ const VideoDownloader = () => {
 
   const handleSelectFolder = async () => {
     if (window.electronAPI) {
-      const folder = await window.electronAPI.selectDownloadFolder();
-      if (folder) {
-        setDownloadPath(folder);
-        // Save the selected path to preferences
-        const savedSettings = JSON.parse(localStorage.getItem('puytSettings') || '{}');
-        const updatedSettings = { ...savedSettings, downloadPath: folder };
-        localStorage.setItem('puytSettings', JSON.stringify(updatedSettings));
-        
-        // Also save to electron settings if available
-        if (window.electronAPI.saveSettings) {
-          try {
-            await window.electronAPI.saveSettings(updatedSettings);
-          } catch (error) {
-            console.error('Error saving settings to electron:', error);
+      try {
+        const folder = await window.electronAPI.selectDownloadFolder();
+        if (folder) {
+          setDownloadPath(folder);
+          // Save the selected path to preferences
+          const savedSettings = JSON.parse(localStorage.getItem('puytSettings') || '{}');
+          const updatedSettings = { ...savedSettings, downloadPath: folder };
+          localStorage.setItem('puytSettings', JSON.stringify(updatedSettings));
+          
+          // Also save to electron settings if available
+          if (window.electronAPI.saveSettings) {
+            try {
+              await window.electronAPI.saveSettings(updatedSettings);
+            } catch (error) {
+              console.error('Error saving settings to electron:', error);
+            }
           }
         }
+      } catch (error) {
+         console.error('Error selecting download folder:', error);
+         setError(`Failed to select download folder: ${error.message || 'Unknown file system error'}`);
       }
     }
   };

@@ -43,6 +43,7 @@ const Settings = () => {
     } catch (error) {
       console.error('Error checking yt-dlp status:', error);
       setYtDlpStatus('not-installed');
+      showNotification(`Failed to check yt-dlp status: ${error.message || 'Connection error'}`, 'error');
     }
   };
 
@@ -54,6 +55,7 @@ const Settings = () => {
       }
     } catch (error) {
       console.error('Error loading settings:', error);
+      showNotification(`Failed to load settings: ${error.message || 'File system error'}`, 'error');
     }
   };
 
@@ -94,7 +96,7 @@ const Settings = () => {
       showNotification('Settings saved automatically!', 'success');
     } catch (error) {
       console.error('Error saving settings:', error);
-      showNotification('Failed to save settings', 'error');
+      showNotification(`Failed to save settings: ${error.message || 'File system error'}`, 'error');
     } finally {
       setIsSaving(false);
     }
@@ -117,7 +119,7 @@ const Settings = () => {
       }
     } catch (error) {
       console.error('Error selecting download path:', error);
-      showNotification('Failed to select download path', 'error');
+      showNotification(`Failed to select download path: ${error.message || 'Dialog error'}`, 'error');
     }
   };
 
@@ -137,7 +139,7 @@ const Settings = () => {
       }
     } catch (error) {
       console.error('Error validating path:', error);
-      showNotification('Failed to validate path', 'error');
+      showNotification(`Failed to validate path "${settings.downloadPath}": ${error.message || 'File system error'}`, 'error');
     }
   };
 

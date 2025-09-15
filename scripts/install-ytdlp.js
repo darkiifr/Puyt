@@ -71,6 +71,7 @@ class YtDlpInstaller {
 
   handleDownloadResponse(response, file, onProgress, resolve, reject) {
     if (response.statusCode !== 200) {
+      file.destroy(); // Clean up the file stream
       return reject(new Error(`Download failed with status: ${response.statusCode}`));
     }
 
@@ -85,6 +86,12 @@ class YtDlpInstaller {
       }
     });
 
+    response.on('error', (error) => {
+      file.destroy(); // Clean up the file stream
+      fs.unlink(this.executablePath, () => {}); // Delete partial file
+      reject(error);
+    });
+
     response.pipe(file);
 
     file.on('finish', () => {
@@ -94,6 +101,7 @@ class YtDlpInstaller {
     });
 
     file.on('error', (error) => {
+      file.destroy(); // Clean up the file stream
       fs.unlink(this.executablePath, () => {}); // Delete partial file
       reject(error);
     });

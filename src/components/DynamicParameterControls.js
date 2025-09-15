@@ -10,6 +10,8 @@ const DynamicParameterControls = ({ videoInfo, onParametersChange, initialSettin
     integratedAudio: initialSettings.integratedAudio !== false, // Default to true
     downloadSubtitles: initialSettings.downloadSubtitles || false,
     embedThumbnail: initialSettings.embedThumbnail || false,
+    preferHEVC: initialSettings.preferHEVC || false,
+    videoCodec: initialSettings.videoCodec || 'auto',
     startTime: '',
     endTime: '',
     customArgs: ''
@@ -218,6 +220,29 @@ const DynamicParameterControls = ({ videoInfo, onParametersChange, initialSettin
             }
           </p>
         </div>
+
+        {/* Video Codec - Only show for video mode */}
+        {!parameters.extractAudio && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              🎬 Video Codec
+            </label>
+            <select
+              value={parameters.videoCodec}
+              onChange={(e) => updateParameter('videoCodec', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="auto">🤖 Auto (Best Available)</option>
+              <option value="h264">H.264/AVC (Universal)</option>
+              <option value="hevc">💎 HEVC/H.265 (Efficient)</option>
+              <option value="vp9">VP9 (Web Optimized)</option>
+              <option value="av1">🚀 AV1 (Future-proof)</option>
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              HEVC offers better compression but may have compatibility issues
+            </p>
+          </div>
+        )}
 
         {/* Audio Format - Only show for video mode */}
         {!parameters.extractAudio && (

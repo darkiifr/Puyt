@@ -25,12 +25,31 @@ const FormatSelector = ({ formats, selectedFormat, onFormatChange, downloadParam
       }
     });
 
-    // Sort by quality
+    // Sort by quality with improved logic
     const sortByQuality = (a, b) => {
-      if (a.height && b.height) return b.height - a.height;
-      if (a.abr && b.abr) return b.abr - a.abr;
+      // For video formats, prioritize by height (resolution)
+      if (a.height && b.height) {
+        const heightDiff = b.height - a.height;
+        if (heightDiff !== 0) return heightDiff;
+        
+        // If same height, prefer higher bitrate
+        if (a.tbr && b.tbr) return b.tbr - a.tbr;
+        if (a.vbr && b.vbr) return b.vbr - a.vbr;
+      }
+      
+      // For audio formats, prioritize by bitrate
+      if (a.abr && b.abr) {
+        const abrDiff = b.abr - a.abr;
+        if (abrDiff !== 0) return abrDiff;
+      }
+      
+      // Fallback to filesize
       if (a.filesize && b.filesize) return b.filesize - a.filesize;
-      return 0;
+      
+      // Prefer formats with more complete information
+      const aScore = (a.height ? 1 : 0) + (a.abr ? 1 : 0) + (a.filesize ? 1 : 0);
+      const bScore = (b.height ? 1 : 0) + (b.abr ? 1 : 0) + (b.filesize ? 1 : 0);
+      return bScore - aScore;
     };
 
     return {
